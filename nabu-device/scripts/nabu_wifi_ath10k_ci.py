@@ -276,6 +276,16 @@ def external_contract(definitions, undefined, common):
     return external, exports
 
 
+def archive_member_padding(stored, original):
+    """Recognize only Apple's ar eight-byte newline tail; never strip object data."""
+    if stored == original:
+        return 0
+    padding = (-len(original)) % 8
+    require(0 < padding < 8 and stored == original + b'\n' * padding,
+            'ath10k archive member drift')
+    return padding
+
+
 def build_kernel(root, out=None, *, headers, inputs=None):
     require(sys.platform == 'darwin', 'Apple compiler/backend builds require macOS Actions')
     root = Path(root).resolve(strict=True)
@@ -361,7 +371,10 @@ def build_kernel(root, out=None, *, headers, inputs=None):
     archive = output / 'libNabuAth10k.a'
     run(['xcrun', 'ar', 'rcs', archive, combined], output, 'archive')
     stored = run(['xcrun', 'ar', 'p', archive, 'all.o'], output, 'archive-member')
-    require(stored == combined.read_bytes(), 'ath10k archive member drift')
+    padding = archive_member_padding(stored, combined.read_bytes())
+    from nabu_gpu_ci import archive_members
+    require(archive_members(archive.read_bytes()) == {'all.o': stored},
+            'ath10k archive payload set differs from the single bound object')
     result = dict(archive=archive.relative_to(root).as_posix(), objects=[combined.relative_to(root).as_posix()],
                   header_dir=Path(headers).relative_to(root).as_posix(),
                   report=(output / 'build-report.json').relative_to(root).as_posix())
@@ -369,7 +382,8 @@ def build_kernel(root, out=None, *, headers, inputs=None):
                   dependencies=dependencies, imports=external, exports=sorted(exports),
                   licenses=licenses,
                   relocatable_sha256=sha(combined.read_bytes()), archive_sha256=sha(archive.read_bytes()),
-                  compiler=compiler, sdk_path=sdk, sdk_version=sdk_version,
+                  archive_member_padding_bytes=padding,
+                   compiler=compiler, sdk_path=sdk, sdk_version=sdk_version,
                   symbol_remaps=REMAP, driver_objects=24, sae_objects=23,
                   compiled=True, archive_members_verified=True,
                   link_qualified=False, runtime_qualified=False, hardware_tested=False)
@@ -467,8 +481,12 @@ def qualify_artifacts(read, metadata):
             [value for value in link if value.endswith('.o') and value != str(root / result['objects'][0])] ==
             [str(root / path) for path in metadata['objects']], 'ath10k relocatable link object set drift')
     archive = get(result['archive'])
-    require(sha(archive) == metadata['archive_sha256'] and
-            archive_members(archive) == {PurePosixPath(result['objects'][0]).name: combined},
-            'ath10k archive/member drift')
+    require(sha(archive) == metadata['archive_sha256'], 'ath10k archive hash drift')
+    members = archive_members(archive)
+    member_name = PurePosixPath(result['objects'][0]).name
+    require(set(members) == {member_name}, 'ath10k archive/member set drift')
+    padding = archive_member_padding(members[member_name], combined)
+    require(metadata.get('archive_member_padding_bytes', 0) == padding,
+            'ath10k archive padding receipt drift')
     return dict(source_qualified=True, object_count=47, archive_qualified=True,
                 link_qualified=False, runtime_qualified=False)
