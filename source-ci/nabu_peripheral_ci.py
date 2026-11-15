@@ -35,7 +35,7 @@ def prepare(upstream, device, *, cpufreq=False, sensor_clock=False, usb_abi_refe
         raise ValueError('Peripheral intent must use Boolean flags')
     if not any(flags.values()):
         return None
-    upstream, device = Path(upstream), Path(device)
+    upstream, device = Path(upstream).resolve(), Path(device).resolve()
     spec = importlib.util.spec_from_file_location('nabu_bound_peripheral_build', device / 'scripts/nabu_peripheral_build.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
