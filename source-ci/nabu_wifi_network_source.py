@@ -59,6 +59,7 @@ LOCAL_PATCHES = {
     'nabu-wifi-network-apple80211-disabled.patch': 'f7bf478854dfb3c76d7b498e2f624d0926c80a40d3a951995aecb8e0d1c11b65',
     'nabu-wifi-network-registry.patch': 'd2d0dc66d3f77a1e7438ae9dc13b2d07e8d291ed0ccbac2a3ef0868168935fbb',
     'nabu-wifi-network-qmi-typed-alloc.patch': 'a16a2c9568d0bb4bf0e23f9221c025481f26d9c2ae28336c6e763f41630d4c8b',
+    'nabu-wifi-network-sta-security-enum.patch': '0f97facb9896f870253f83c1a5be24c6e7bc42ad7326897aa9c37b101f11a872',
 }
 # Check actual prepared headers, rather than supplying an old exported SDK.
 # apply checks the actual prepared tree against these API header pins.

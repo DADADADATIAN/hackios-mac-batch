@@ -1,0 +1,7 @@
+--- a/bsd/sys/hakios.sta.h
++++ b/bsd/sys/hakios.sta.h
+@@ -45,1 +45,3 @@
+-enum { HAKIOS_STA_OPEN, HAKIOS_STA_WPA2_PSK };
++/* Keep the shared ath10k request enum complete. This declaration does not
++ * enable WPA3 admission; NabuWifiService still accepts WPA2_PSK only. */
++enum { HAKIOS_STA_OPEN, HAKIOS_STA_WPA2_PSK, HAKIOS_STA_WPA3_SAE };
