@@ -30,6 +30,14 @@ OBJECTS = {'cpufreq': 'NabuCpuFreq.o', 'sensor_clock': 'NabuSensorClock.o',
 PREFIXES = {'cpufreq': ('_nabu_cpufreq_',), 'sensor_clock': ('_nabu_sensor_clock_',),
             'usb_abi_reference': ('_nabu_usb_21h16_',)}
 USB_INPUT = 'f7d1952c7a21633d212eccf288e77444fff0cc86976db5de292f6819c2ffa1b2'
+APPLE_CC1_OPTIONS = [
+    '-clang-vendor-feature=+disableNonDependentMemberExprInCurrentInstantiation',
+    '-fno-odr-hash-protocols', '-clang-vendor-feature=+enableAggressiveVLAFolding',
+    '-clang-vendor-feature=+revert09abecef7bbf', '-clang-vendor-feature=+thisNoAlignAttr',
+    '-clang-vendor-feature=+thisNoNullAttr',
+    '-clang-vendor-feature=+disableAtImportPrivateFrameworkInImplementationError',
+    '-Wno-error=allocator-wrappers',
+]
 
 
 def sha(data):
@@ -158,8 +166,15 @@ def read_object(read, unit, key, archive):
     command = unit['compile_command']
     require(isinstance(command, list) and command and all(isinstance(x, str) for x in command),
             'Peripheral compilation requires recorded argv')
-    require('-mkernel' in command and not any(x in command for x in ('-Xclang', '-Xpreprocessor')),
-            'Peripheral command lacks kernel mode or uses opaque forwarding')
+    require('-mkernel' in command and not any(arg.startswith(('-Xpreprocessor', '-Xclang=')) for arg in command),
+            'Peripheral command lacks kernel mode or forwards preprocessing')
+    forwarded = []
+    for index, arg in enumerate(command):
+        if arg == '-Xclang':
+            require(index + 1 < len(command), 'Peripheral cc1 forwarding is truncated')
+            forwarded.append(command[index + 1])
+    require(not forwarded or forwarded == APPLE_CC1_OPTIONS,
+            'Peripheral cc1 forwarding differs from the pinned Apple compiler options')
     require(json.loads(read(recorded_path(unit['compile_command_path']))) == command,
             'Peripheral command record differs from report')
     compile_gate(command, GATES[key][1], True)

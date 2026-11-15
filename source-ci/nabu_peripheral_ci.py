@@ -21,7 +21,10 @@ def wire_cpufreq(text):
         'python3 scripts/nabu_cpufreq_source.py --root "$ROOT" --restore\n' + anchor)
     anchor = '  python3 scripts/nabu_capture_source.py --root "$ROOT" --device "$UNIXNU_DEVICE"\nfi\n'
     text = replace_once(text, anchor, anchor +
-        'python3 scripts/nabu_cpufreq_source.py --root "$ROOT" --enable\n')
+        'python3 scripts/nabu_cpufreq_source.py --root "$ROOT" --enable\n'
+        # Capture transforms are idempotent. Re-record their final source
+        # identities after the bound CPU startup call has been inserted.
+        'python3 scripts/nabu_capture_source.py --root "$ROOT" --device "$UNIXNU_DEVICE"\n')
     anchor = 'EXTRA_MAKE_ARGS=()\n'
     return replace_once(text, anchor, anchor +
         'EXTRA_MAKE_ARGS+=("processor.o_CFLAGS_ADD=-DXNU_NABU_CPUFREQ=1")\n'
