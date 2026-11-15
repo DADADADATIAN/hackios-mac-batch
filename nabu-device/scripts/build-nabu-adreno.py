@@ -145,6 +145,12 @@ def main():
     if sys.platform != 'darwin':
         raise SystemExit('Apple archive compilation runs in the macOS GitHub Actions workflow')
     metal = os.environ.get('NABU_GPU_METAL') == '1'
+    clients_24_value = os.environ.get('NABU_GPU_CLIENTS_24', '0')
+    if clients_24_value not in ('0', '1'):
+        raise SystemExit('NABU_GPU_CLIENTS_24 must be zero or one')
+    clients_24 = clients_24_value == '1'
+    if clients_24 and not metal:
+        raise SystemExit('24 GPU clients require the captured Metal profile')
     dpu_snapshot = os.environ.get('NABU_DPU_SNAPSHOT') == '1'
     userprobe = os.environ.get('NABU_GPU_USERPROBE') == '1'
     if userprobe and not metal:
@@ -215,6 +221,8 @@ def main():
             # Selects the publication path in the A640 overlay. The diagnostic
             # archive must not compile it, because it links none of those objects.
             command.append('-DNABU_GPU_METAL=1')
+        if clients_24:
+            command.append('-DNABU_GPU_CLIENTS_24=1')
         if dpu_snapshot and source.stem in ('NabuDpuSnapshot', 'NativeAdrenoGpuContext'):
             # Both the implementation and its guarded bringUp caller need the
             # explicit opt-in. Compiling only the implementation leaves it unused.
@@ -296,6 +304,12 @@ def main():
               'kernelcache': str(kernelcache), 'kernelcache_sha256': kernelcache_sha,
               'metal_accelerator': metal, 'runtime_qualified': False, 'hardware_tested': False,
               'gpu_userprobe_boot_support': userprobe,
+              'client_policy': {'enabled': clients_24, 'default': 'off',
+                                'max_clients': 24 if clients_24 else 4,
+                                'aperture_bytes': 1 << (32 if clients_24 else 31),
+                                'table_pages': 2053 if clients_24 else 1027,
+                                'leaf_budget': 1 << (20 if clients_24 else 19),
+                                'runtime_qualified': False},
               'dpu_snapshot': {'enabled': dpu_snapshot, 'default': 'off',
                                'boot_arg': 'nabu-dpu-snapshot=1',
                                'depth_arg': 'nabu-dpu-smmu-depth',

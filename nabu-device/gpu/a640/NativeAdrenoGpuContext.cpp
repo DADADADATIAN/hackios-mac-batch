@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #include "NativeAdrenoGpuContext.h"
 #include <IOKit/IOLib.h>
+/* G1 mechanism provenance and paired budgets: NabuGpuClientPolicy.h. */
+extern "C" __attribute__((used)) const NabuGpuClientPolicyRecord
+    nabu_gpu_context_client_policy=NabuGpuCompiledClientPolicy;
 #if defined(XNU_NABU_DPU_SNAPSHOT) && XNU_NABU_DPU_SNAPSHOT
 extern "C" void nabu_dpu_snapshot_once(unsigned,unsigned);
 #endif
@@ -46,7 +49,7 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io,unsigned bank,uns
     }
     if(!status) {
         step(Prepare);
-        status=smmu_.prepare(&tables_,0,0,GpuApertureBytes,NativeAdrenoSmmuContext::MaxLeaves,
+        status=smmu_.prepare(&tables_,0,0,GpuApertureBytes,NabuGpuApertureLeaves,
             bank,asid,1000,report->output_bits,false);
         if(!status)smmu_.setAliasScratch(alias_scratch_,sizeof(alias_scratch_)/sizeof(*alias_scratch_));
     }

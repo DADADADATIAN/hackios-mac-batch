@@ -522,6 +522,9 @@ def main():
                     raise ValueError('GPU candidate requires its explicit profile and persisted logging contract')
                 manifest['gpu_qualification'] = qualify_gpu_candidate(
                     args.upstream, args.device, candidate, expected_profile=identity['profile'])
+                if bool(manifest['gpu_qualification'].get('client_policy', {}).get('enabled')) != bool(prepared.get('gpu_clients_24')):
+                    raise ValueError('Requested GPU client policy differs from actual compiled policy')
+                summary['gpu_clients_24'] = bool(prepared.get('gpu_clients_24'))
                 if prepared.get('gpu_userprobe_boot') is True and not manifest['gpu_qualification'].get('userprobe_boot'):
                     raise ValueError('Requested GPU userprobe boot support was not qualified')
                 ui = manifest['gpu_qualification'].get('userprobe_boot', {}).get('ui_watch', {})

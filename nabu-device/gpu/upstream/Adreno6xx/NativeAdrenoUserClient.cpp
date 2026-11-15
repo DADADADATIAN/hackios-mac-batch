@@ -238,7 +238,10 @@ IOReturn NativeAdrenoUserClient::query(NativeAdrenoAbiParams *params)
     params->max_bo_bytes=UINT64_C(1)<<NativeAdrenoAbiMaxBoBytesShift;
     return kIOReturnSuccess;
 }
-/* Per client slot (4, the kernel's own client last): [0] live objects now, [1] their peak, [2] refused BoAllocs, [3] last refusal status,
+/* Fixed legacy diagnostic rows: slots 0..3, then a shared fallback row for
+ * the kernel and G1 slots >=4. This is not the connection capacity or a
+ * per-client statistic for those extra slots. Preserve the 5x6 diagnostic ABI.
+ * [0] live objects now, [1] their peak, [2] refused BoAllocs, [3] last refusal status,
  * [4] bytes of the last refused request, [5] the window's highest mapped end in MiB above its start. Turnip turns any refusal into
  * VK_ERROR_OUT_OF_DEVICE_MEMORY, which its command streams do not check (int-237: backboardd wrote through a NULL stream pointer). */
 extern "C" {volatile uint32_t native_adreno_client_stats[5][6];}

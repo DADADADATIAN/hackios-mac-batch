@@ -33,6 +33,11 @@
 #include "NativeAdrenoDisplay.h"
 #include "NativeAdrenoScheduler.h"
 #include "NabuGpuProblemLog.h"
+#include "NabuGpuClientPolicy.h"
+
+/* G1 mechanism provenance and paired budgets: NabuGpuClientPolicy.h. */
+extern "C" __attribute__((used)) const NabuGpuClientPolicyRecord
+    nabu_gpu_publication_client_policy=NabuGpuCompiledClientPolicy;
 
 static NativeAdrenoIntegration integration = {};
 extern "C" kmod_info_t g_kernel_kmod_info;
@@ -137,10 +142,12 @@ struct NativeAdrenoAskerRecord native_adreno_metal_askers[12];
  * wallpaper, iconservicesagent for the icons, WidgetRenderer_Default for the widgets: int-196's screen pictures showed a black wallpaper and white widget
  * boxes, none of which had a native device), 170 MiB each (page aligned). int-198: iconservicesagent reached 128 MiB into its window and then lost its
  * Metal device; whether the window is the cause is what the [gpu windows] log row decides before these sizes change. */
-enum : unsigned {NativeAdrenoMaxClients=4};
+/* G1 keeps the established four windows by default. The explicit 24-client
+ * build also expands the GPU table arena; per-process admission is unchanged. */
+enum : unsigned {NativeAdrenoMaxClients=NabuGpuMaxClients};
+static_assert(NativeAdrenoMaxClients*NativeAdrenoAbiMaxQueues<=256,"scheduler queue capacity");
 static NativeAdrenoAbiResourceBudget resourceBudgets[NativeAdrenoMaxClients]{};
-static const struct {uint64_t start,bytes;} kClientWindows[NativeAdrenoMaxClients]={
-    {0x20000000ull,0x40000000ull},{0x60000000ull,0x0AAA9000ull},{0x6AAA9000ull,0x0AAA9000ull},{0x75552000ull,0x0AAA9000ull}};
+static constexpr auto &kClientWindows=NabuGpuClientWindows;
 
 namespace {
 void shiftName(char names[3][17]) {
@@ -743,10 +750,7 @@ IOReturn AGXDeviceUserClient::mount(bool kernel,unsigned connection_limit)
     /* The render server takes slot 0 (the large window) when free; every other process, or a second render-server connection, the next free one. */
     unsigned slot=NativeAdrenoMaxClients;
     if(kernel)slot=g.kernel_client?NativeAdrenoMaxClients:0;
-    else {
-        if(!strncmp(name_,"backboardd",sizeof name_) && !g.slots[0])slot=0;
-        for(unsigned i=1;slot==NativeAdrenoMaxClients && i<NativeAdrenoMaxClients;++i)if(!g.slots[i])slot=i;
-    }
+    else slot=NabuGpuSelectClientSlot(!strncmp(name_,"backboardd",sizeof name_),g.slots);
     const IOReturn opened=g.failed?kIOReturnNotReady:capped?kIOReturnBusy:
         slot<NativeAdrenoMaxClients?core->open(NativeAdrenoAbiVersion,g.vm,g.submit,g.ring,g.input_bits,g.output_bits):kIOReturnNoSpace;
     IOReturn result=opened;

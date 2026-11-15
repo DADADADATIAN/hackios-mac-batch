@@ -695,6 +695,8 @@ def main():
     p.add_argument('--profile', choices=PROFILES, default=PROFILES[0])
     p.add_argument('--capture-logs', action='store_true', help='Build the explicit RAM/ESP logging capability; writes remain opt-in')
     p.add_argument('--gpu-userprobe', action='store_true', help='Enable the closed ABI1 probe addon boot transport')
+    p.add_argument('--gpu-clients-24', action='store_true',
+                   help='Opt in to 24 GPU clients and the paired 4 GiB GPU aperture')
     p.add_argument('--ui-watch', action='store_true', help='Compile opt-in bounded UI exec/main-thread observations')
     p.add_argument('--wifi-control', action='store_true', help='Build the independent firmware loader and MPSS control executor')
     p.add_argument('--wifi-radio', action='store_true', help='Build the owned WLAN DMA domain before PAS authentication')
@@ -707,6 +709,8 @@ def main():
     p.add_argument('--backlight-power', action='store_true',
                    help='Compile the default-off synchronous Legacy PM hook; requires backlight and capture')
     args = p.parse_args()
+    if args.gpu_clients_24 and (args.profile != UFS_GPU_METAL_PROFILE or not args.capture_logs):
+        raise SystemExit('24 GPU clients require the captured Metal profile')
     if args.wifi_control and (args.profile not in UFS_OWNER_PROFILES or not args.capture_logs):
         raise SystemExit('The first Wi-Fi control candidate requires a captured hardware UFS owner profile')
     if args.wifi_radio and (not args.wifi_control or args.profile != UFS_GPU_METAL_PROFILE):
@@ -837,7 +841,8 @@ def main():
         raise ValueError('Expected one archive entry for nabu shallow idle')
     idle_value = '1' if nabu_idle else '0'
     kernel.write_text(text.replace(anchor,
-        f"    env['XNU_NABU_SHALLOW_IDLE'] = '{idle_value}'\n" + anchor, 1), encoding='utf-8')
+        f"    env['XNU_NABU_SHALLOW_IDLE'] = '{idle_value}'\n" +
+        f"    env['NABU_GPU_CLIENTS_24'] = '{int(args.gpu_clients_24)}'\n" + anchor, 1), encoding='utf-8')
     signature_scan = (prepare_signature_scan(args.upstream)
                       if 'CONFIG_XNU_NATIVE_CS_HASH_CACHE=y' in options else None)
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -856,6 +861,7 @@ def main():
         'ufs_gpu': args.profile in (UFS_GPU_PROFILE, UFS_GPU_METAL_PROFILE),
         'ufs_gpu_metal': args.profile == UFS_GPU_METAL_PROFILE,
         'gpu_userprobe_boot': args.gpu_userprobe, 'ui_watch': args.ui_watch,
+        'gpu_clients_24': args.gpu_clients_24,
         'gpu': ({'mode': 'a640_metal', 'firmware_mode': 'adt', 'trigger': 'nabu-gpu=1',
                  'metal_accelerator': True, 'runtime_qualified': False}
                 if args.profile == UFS_GPU_METAL_PROFILE else

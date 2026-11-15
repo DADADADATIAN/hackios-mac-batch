@@ -494,6 +494,68 @@ def accelerator_bindings(read, candidate, report):
             'checks': checks, 'runtime_qualified': False}
 
 
+def qualify_client_policy(report, commands, sources, metal):
+    """Bind the G1 opt-in to every actual GPU compilation, including its callers."""
+    header = 'gpu/a640/NabuGpuClientPolicy.h'
+    declared = report.get('client_policy')
+    if header not in sources:
+        require(declared is None, 'GPU client policy has no source header')
+        require(not any('NABU_GPU_CLIENTS_24' in arg for cmd in commands.values() for arg in cmd),
+                'Legacy GPU source unexpectedly selects a client policy')
+        return None
+    require(isinstance(declared, dict) and type(declared.get('enabled')) is bool,
+            'GPU client policy declaration is missing or malformed')
+    enabled = declared['enabled']
+    expected = {'enabled': enabled, 'default': 'off', 'max_clients': 24 if enabled else 4,
+                'aperture_bytes': 1 << (32 if enabled else 31),
+                'table_pages': 2053 if enabled else 1027,
+                'leaf_budget': 1 << (20 if enabled else 19), 'runtime_qualified': False}
+    require(declared == expected and (metal or not enabled), 'GPU client/table policy mismatch')
+    for name, command in commands.items():
+        flags = [arg for arg in command if 'NABU_GPU_CLIENTS_24' in arg]
+        require(flags == (['-DNABU_GPU_CLIENTS_24=1'] if enabled else []),
+                'GPU client policy compilation mismatch: ' + name)
+    return {**expected, 'header_sha256': sources[header]}
+
+
+CLIENT_POLICY_SYMBOLS = {
+    'NativeAdrenoGpuContext.o': '_nabu_gpu_context_client_policy',
+    'NativeAdrenoSmmuContext.o': '_nabu_gpu_smmu_client_policy',
+    'NativeAdrenoPublish.late.o': '_nabu_gpu_publication_client_policy',
+}
+
+
+def qualify_client_policy_records(read, candidate, policy, metal):
+    """Reject a mixed-policy object or final kernel, even with matching source IDs."""
+    from nabu_idle_ci import _image
+    expected = struct.pack('<6Q', 1, int(policy['enabled']), policy['max_clients'],
+                           policy['aperture_bytes'], policy['table_pages'], policy['leaf_budget'])
+    final = _image(candidate, 2)
+
+    def record(image, name):
+        rows = [row for row in image['symbols'] if row[0] == name and not row[2] & 0xe0]
+        require(len(rows) == 1 and rows[0][2] & 0xf == 0xf,
+                'GPU client policy is not a unique external section definition: ' + name)
+        address = rows[0][1]
+        sections = [section for section in image['sections']
+                    if section[0] <= address and address + len(expected) <= section[0] + section[1]
+                    and not section[5] & 0x800000ff]
+        require(len(sections) == 1, 'GPU client policy is not backed regular data: ' + name)
+        start, length, offset = sections[0][:3]
+        require(offset + length <= len(image['content']), 'Unbacked GPU client policy: ' + name)
+        actual = image['content'][offset + address - start:offset + address - start + len(expected)]
+        require(actual == expected, 'Compiled GPU client/table policy mismatch: ' + name)
+        return hex(address)
+
+    bound = {}
+    for obj, name in CLIENT_POLICY_SYMBOLS.items():
+        if obj == 'NativeAdrenoPublish.late.o' and not metal:
+            continue
+        bound[name] = {'object': obj, 'object_definition': record(_image(read(OUTPUT + obj), 1), name),
+                       'final_definition': record(final, name)}
+    return {**policy, 'compiled_records': bound, 'record_sha256': sha(expected)}
+
+
 def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
     """read(relative_name) returns manifest-bound bytes in the collector layout."""
     contract = gpu_contract(profile)
@@ -560,6 +622,7 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
     commands = json_object(read(OUTPUT + 'compile-command.json'))
     require(set(commands) == required_objects and all(isinstance(command, list) and command
             for command in commands.values()), 'GPU compile command inventory mismatch')
+    client_policy = qualify_client_policy(report, commands, sources, metal)
     if dpu_enabled:
         require('-DXNU_NABU_DPU_SNAPSHOT=1' in commands[DPU_SNAPSHOT_STEM],
                 'DPU snapshot unit lacks its compile gate')
@@ -657,6 +720,8 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
     else:
         require(not report.get('gpu_userprobe_boot_support'),
                 'Diagnostic GPU profile contains userprobe boot support')
+    if client_policy is not None:
+        result['client_policy'] = qualify_client_policy_records(read, candidate, client_policy, metal)
     return result
 
 

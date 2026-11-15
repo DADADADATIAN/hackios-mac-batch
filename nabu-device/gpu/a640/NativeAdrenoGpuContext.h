@@ -2,10 +2,11 @@
 #ifndef NATIVE_ADRENO_GPU_CONTEXT_H
 #define NATIVE_ADRENO_GPU_CONTEXT_H
 #include "NativeAdrenoGmuContext.h"
+#include "NabuGpuClientPolicy.h"
 
 enum : uint64_t {
     GpuSqeIova=0x400000, GpuRingIova=0x200000, GpuMemptrsIova=0x300000,
-    GpuPwrupIova=0x301000, GpuScratchIova=0x302000, GpuApertureBytes=0x80000000
+    GpuPwrupIova=0x301000, GpuScratchIova=0x302000, GpuApertureBytes=NabuGpuApertureBytes
 };
 enum : size_t {GpuSqeBytes=0x13000,GpuRingBytes=0x8000,GpuPageBytes=0x1000,GpuBufferCount=5};
 /* A640 has no APRIV or LPAC. All four nonsecure GPU SIDs share this bank.
@@ -21,7 +22,7 @@ class NativeAdrenoGpuContext final {
     bool ready_=false,used_=false;
 public:
     enum Step : uint32_t {Allocate=1,Prepare,Program,Attach,VmAttach,Map,Ready,Ownership};
-    enum : size_t {TablePages=1027};
+    enum : size_t {TablePages=NabuGpuTablePages};
     IOReturn bringUp(const ArmSmmu4KIo *,unsigned bank,unsigned asid,const unsigned slots[4],
         const uint16_t sids[4],void (*progress)(uint32_t),NativeAdrenoGmuContextReport *);
     bool ready() const {return ready_;}

@@ -1,12 +1,16 @@
 /* SPDX-License-Identifier: MIT */
 #include "NativeAdrenoSmmuContext.h"
+#include "NabuGpuClientPolicy.h"
 #include <IOKit/IOLib.h>
+/* G1 mechanism provenance and paired budgets: NabuGpuClientPolicy.h. */
+extern "C" __attribute__((used)) const NabuGpuClientPolicyRecord
+    nabu_gpu_smmu_client_policy=NabuGpuCompiledClientPolicy;
 IOReturn NativeAdrenoSmmuContext::prepare(NativeAdrenoMemory *tables,unsigned upper,uint64_t iova,
     size_t bytes,size_t leaf_budget,unsigned bank,unsigned asid,unsigned poll_budget,unsigned output_bits,
     bool continueAfterFault)
 {
     if(prepared_ || poisoned_)return kIOReturnBusy;
-    if(!tables || upper>1 || !bytes || (iova&4095) || !leaf_budget || leaf_budget>MaxLeaves ||
+    if(!tables || upper>1 || !bytes || (iova&4095) || !leaf_budget || leaf_budget>NabuGpuApertureLeaves ||
         bank>63 || asid>0xffff || !poll_budget || poll_budget>4096)
         return kIOReturnBadArgument;
     const IOReturn prepared=NativeAdrenoPrepareSmmuMemory(tables,32,output_bits,iova,bytes,upper,leaf_budget,

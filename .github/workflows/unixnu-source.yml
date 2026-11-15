@@ -22,6 +22,10 @@ on:
         description: Build a signed standalone A640 owned-BO probe (Metal profile only; not installed)
         type: boolean
         default: false
+      gpu_clients_24:
+        description: Opt-in 24 GPU clients with paired 4 GiB GPU aperture; captured Metal kernel only
+        type: boolean
+        default: false
       wifi_control:
         description: Build the independent ESP firmware loader and one-shot MPSS control chain
         type: boolean
@@ -122,6 +126,7 @@ jobs:
           REQUESTED_CONFIG: ${{ inputs.defconfig }}
           CAPTURE_LOGS: ${{ inputs.capture_logs }}
           GPU_USERPROBE: ${{ inputs.gpu_userprobe }}
+          GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
           UI_WATCH: ${{ inputs.ui_watch }}
           WIFI_CONTROL: ${{ inputs.wifi_control }}
           WIFI_RADIO: ${{ inputs.wifi_radio }}
@@ -174,6 +179,10 @@ jobs:
           fi
           if [ "$DPU_SNAPSHOT" = true ]; then log_args+=(--dpu-snapshot); fi
           if [ "$GPU_USERPROBE" = true ]; then log_args+=(--gpu-userprobe); fi
+          if [ "$GPU_CLIENTS_24" = true ]; then
+            test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            log_args+=(--gpu-clients-24)
+          fi
           if [ "$UI_WATCH" = true ]; then
             test "$GPU_USERPROBE" = true && test "$CAPTURE_LOGS" = true
             test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
@@ -308,6 +317,7 @@ jobs:
       - name: Cross-build Turnip and the Metal plugin for iOS against the A640 ABI
         id: turnip
         env:
+          GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
           FPS_OPT: ${{ inputs.fps_opt }}
           WALLPAPER_FIX: ${{ inputs.wallpaper_fix }}
           WORKER_OPT: ${{ inputs.worker_opt }}
@@ -323,6 +333,7 @@ jobs:
           COMPLETION_OBSERVE: ${{ inputs.completion_observe }}
           TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
         run: |
+          test "$GPU_CLIENTS_24" != true
           test "$WIFI_RADIO" != true && test "$WIFI_ATH10K" != true && test "$HALL_SENSOR" != true && test "$DPU_SNAPSHOT" != true && test "$BACKLIGHT" != true && test "$BACKLIGHT_POWER" != true
           fps_args=()
           if [ "$TURNIP_RANGE_DEDUP" = true ]; then fps_args+=(--turnip-range-dedup); fi
