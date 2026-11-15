@@ -38,6 +38,18 @@ on:
         description: Build opt-in GPIO9 Hall sampling with a bound source FDT
         type: boolean
         default: false
+      backlight:
+        description: Build the opt-in read-only KTZ8866 backlight probe with a bound source FDT
+        type: boolean
+        default: false
+      backlight_power:
+        description: Compile the default-off Legacy backlight power hook (requires probe, capture and hardware display)
+        type: boolean
+        default: false
+      dpu_snapshot:
+        description: Build the read-only DPU topology/cadence snapshot diagnostic (A640 GPU profiles only)
+        type: boolean
+        default: false
       ui_watch:
         description: Build opt-in bounded UI exec and first main-thread observation (no device installation)
         type: boolean
@@ -63,6 +75,10 @@ on:
         type: choice
         options: [unchanged, sysmem, gmem]
         default: unchanged
+      turnip_range_dedup:
+        description: Turnip-only opt-in exact submit-range dedup patch (markers stripped); default build unchanged
+        type: boolean
+        default: false
       async_fix:
         description: Turnip-only async Metal creation fix and bounded callback regression; no device installation
         type: boolean
@@ -111,14 +127,19 @@ jobs:
           WIFI_RADIO: ${{ inputs.wifi_radio }}
           WIFI_ATH10K: ${{ inputs.wifi_ath10k }}
           HALL_SENSOR: ${{ inputs.hall_sensor }}
+          BACKLIGHT: ${{ inputs.backlight }}
+          BACKLIGHT_POWER: ${{ inputs.backlight_power }}
+          DPU_SNAPSHOT: ${{ inputs.dpu_snapshot }}
           TURNIP_RENDER_MODE: ${{ inputs.turnip_render_mode }}
           FPS_OPT: ${{ inputs.fps_opt }}
           WALLPAPER_FIX: ${{ inputs.wallpaper_fix }}
           ASYNC_FIX: ${{ inputs.async_fix }}
           COMPLETION_FIX: ${{ inputs.completion_fix }}
           COMPLETION_OBSERVE: ${{ inputs.completion_observe }}
+          TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
         run: |
           test "$FPS_OPT" != true
+          test "$TURNIP_RANGE_DEDUP" != true
           test "$WALLPAPER_FIX" != true
           test "$ASYNC_FIX" != true
           test "$COMPLETION_FIX" != true
@@ -142,6 +163,16 @@ jobs:
             log_args+=(--wifi-ath10k)
           fi
           if [ "$HALL_SENSOR" = true ]; then log_args+=(--hall-sensor); fi
+          if [ "$BACKLIGHT" = true ]; then log_args+=(--backlight); fi
+          if [ "$BACKLIGHT_POWER" = true ]; then
+            test "$BACKLIGHT" = true && test "$CAPTURE_LOGS" = true
+            case "$REQUESTED_CONFIG" in
+              nabu_ufs_cpu_present_defconfig|nabu_ufs_gpu_defconfig|nabu_ufs_gpu_metal_defconfig) ;;
+              *) printf '%s\n' 'Backlight power requires a hardware CPU display profile' >&2; exit 2 ;;
+            esac
+            log_args+=(--backlight-power)
+          fi
+          if [ "$DPU_SNAPSHOT" = true ]; then log_args+=(--dpu-snapshot); fi
           if [ "$GPU_USERPROBE" = true ]; then log_args+=(--gpu-userprobe); fi
           if [ "$UI_WATCH" = true ]; then
             test "$GPU_USERPROBE" = true && test "$CAPTURE_LOGS" = true
@@ -284,12 +315,17 @@ jobs:
           WIFI_RADIO: ${{ inputs.wifi_radio }}
           WIFI_ATH10K: ${{ inputs.wifi_ath10k }}
           HALL_SENSOR: ${{ inputs.hall_sensor }}
+          BACKLIGHT: ${{ inputs.backlight }}
+          BACKLIGHT_POWER: ${{ inputs.backlight_power }}
+          DPU_SNAPSHOT: ${{ inputs.dpu_snapshot }}
           ASYNC_FIX: ${{ inputs.async_fix }}
           COMPLETION_FIX: ${{ inputs.completion_fix }}
           COMPLETION_OBSERVE: ${{ inputs.completion_observe }}
+          TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
         run: |
-          test "$WIFI_RADIO" != true && test "$WIFI_ATH10K" != true && test "$HALL_SENSOR" != true
+          test "$WIFI_RADIO" != true && test "$WIFI_ATH10K" != true && test "$HALL_SENSOR" != true && test "$DPU_SNAPSHOT" != true && test "$BACKLIGHT" != true && test "$BACKLIGHT_POWER" != true
           fps_args=()
+          if [ "$TURNIP_RANGE_DEDUP" = true ]; then fps_args+=(--turnip-range-dedup); fi
           if [ "$FPS_OPT" = true ]; then fps_args+=(--fps-opt); fi
           if [ "$WALLPAPER_FIX" = true ]; then
             test "$FPS_OPT" = true

@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: MIT */
 #include "NativeAdrenoGpuContext.h"
 #include <IOKit/IOLib.h>
+#if defined(XNU_NABU_DPU_SNAPSHOT) && XNU_NABU_DPU_SNAPSHOT
+extern "C" void nabu_dpu_snapshot_once(unsigned,unsigned);
+#endif
 
 static const uint64_t kIovas[GpuBufferCount]={GpuSqeIova,GpuRingIova,GpuMemptrsIova,GpuPwrupIova,GpuScratchIova};
 static const size_t kBytes[GpuBufferCount]={GpuSqeBytes,GpuRingBytes,GpuPageBytes,GpuPageBytes,GpuPageBytes};
@@ -83,5 +86,10 @@ IOReturn NativeAdrenoGpuContext::bringUp(const ArmSmmu4KIo *io,unsigned bank,uns
     if(!status) {step(Ready);ready_=true;}
     report->status=status;
     NativeAdrenoCaptureSmmuReport(io,&smmu_,report);
+#if defined(XNU_NABU_DPU_SNAPSHOT) && XNU_NABU_DPU_SNAPSHOT
+    /* This sleepable GPU bring-up thread holds no display lock. The inherited
+     * framebuffer is initialized before this point. Observe only, once. */
+    if(!status)nabu_dpu_snapshot_once(250,0);
+#endif
     return status;
 }

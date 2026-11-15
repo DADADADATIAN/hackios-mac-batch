@@ -700,6 +700,12 @@ def main():
     p.add_argument('--wifi-radio', action='store_true', help='Build the owned WLAN DMA domain before PAS authentication')
     p.add_argument('--wifi-ath10k', action='store_true', help='Build the pinned ath10k backend and native network host')
     p.add_argument('--hall-sensor', action='store_true', help='Build opt-in Hall GPIO sampling')
+    p.add_argument('--dpu-snapshot', action='store_true',
+                   help='Build the read-only DPU topology/cadence snapshot diagnostic')
+    p.add_argument('--backlight', action='store_true',
+                   help='Build the opt-in read-only KTZ8866 backlight probe')
+    p.add_argument('--backlight-power', action='store_true',
+                   help='Compile the default-off synchronous Legacy PM hook; requires backlight and capture')
     args = p.parse_args()
     if args.wifi_control and (args.profile not in UFS_OWNER_PROFILES or not args.capture_logs):
         raise SystemExit('The first Wi-Fi control candidate requires a captured hardware UFS owner profile')
@@ -709,6 +715,14 @@ def main():
         raise SystemExit('Wi-Fi ath10k requires the explicit radio build')
     if args.hall_sensor and (args.profile not in UFS_OWNER_PROFILES or not args.capture_logs):
         raise SystemExit('Hall sampling requires a captured hardware UFS owner profile')
+    if args.dpu_snapshot and (args.profile not in (UFS_GPU_PROFILE, UFS_GPU_METAL_PROFILE) or
+                              not args.capture_logs):
+        raise SystemExit('DPU snapshot requires a captured A640 GPU profile')
+    if args.backlight and (args.profile not in UFS_OWNER_PROFILES or not args.capture_logs):
+        raise SystemExit('Backlight self-test requires a captured hardware UFS owner profile')
+    if args.backlight_power and (not args.backlight or not args.capture_logs or
+                                 args.profile not in (UFS_CPU_PRESENT_PROFILE, UFS_GPU_PROFILE, UFS_GPU_METAL_PROFILE)):
+        raise SystemExit('Backlight power requires backlight, capture and a hardware CPU display profile')
     if args.ui_watch and (args.profile != UFS_GPU_METAL_PROFILE or not args.capture_logs or not args.gpu_userprobe):
         raise SystemExit('UI watch requires the explicit captured Metal profile and GPU userprobe')
     if args.capture_logs and args.profile not in UFS_OWNER_PROFILES:
@@ -802,6 +816,14 @@ def main():
     if args.hall_sensor:
         from nabu_hall_ci import enable_hall
         hall_sensor = enable_hall(args.upstream, args.device)
+    dpu_snapshot = None
+    if args.dpu_snapshot:
+        from nabu_dpu_snapshot_ci import enable_dpu_snapshot
+        dpu_snapshot = enable_dpu_snapshot(args.upstream, args.device)
+    backlight = None
+    if args.backlight:
+        from nabu_backlight_ci import enable_backlight
+        backlight = enable_backlight(args.upstream, args.device, power=args.backlight_power)
     data_none = (prepare_data_none(args.upstream, args.device)
                  if 'CONFIG_XNU_OWNER_DATA_MOUNT=y' in options else None)
     nabu_idle = None
@@ -854,6 +876,8 @@ def main():
         'log_capture': log_capture,
         'wifi_control': wifi_control,
         'hall_sensor': hall_sensor,
+        'dpu_snapshot': dpu_snapshot,
+        'backlight': backlight,
         'vc_text_scale': {'argument': VC_TEXT_SCALE['argument'],
                           'default': VC_TEXT_SCALE['default'],
                           'maximum': VC_TEXT_SCALE['maximum'],

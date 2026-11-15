@@ -26,6 +26,9 @@ ADRENOMETAL = 'https://github.com/RigoLigoRLC/unixnu-adrenometal.git'
 ADRENOMETAL_COMMIT = 'baad47ca22b181bf0ef0d08412d3ed1f96945e16'
 # nabu patches applied after UniXNU's recorded-series identity check (paths relative to the device tree).
 NABU_PATCHES = ('patches/mesa-turnip-a640-trace-guard.patch',)
+# Opt-in donor-port patch (turnip-submit-range-dedup, markers stripped). Appended to the applied
+# series only when --turnip-range-dedup is passed, so the default build produces the same library.
+RANGE_DEDUP_PATCH = 'patches/turnip-nabu-submit-range-dedup.patch'
 TURNIP_BUILDER_SHA256 = '16243c028683d3f7d1e654db7988d41d1651abe71b6525b127d27441912865ff'
 PYTHON_PACKAGES = ('meson==1.6.1', 'mako==1.3.8', 'pyyaml==6.0.2', 'packaging==24.2')
 
@@ -116,6 +119,8 @@ def main():
                         help='build the opt-in lowering worker on the deployed nine-patch wallpaper baseline')
     parser.add_argument('--turnip-render-mode', choices=('sysmem', 'gmem'),
                         help='matched render-mode comparison with pass counters; requires --worker-opt; keeps nocb')
+    parser.add_argument('--turnip-range-dedup', action='store_true',
+                        help='opt-in exact raw submit-range dedup patch (markers stripped); default build unchanged')
     parser.add_argument('--async-fix', action='store_true',
                         help='qualify and build asynchronous Metal creation on the four-patch plugin baseline')
     parser.add_argument('--completion-fix', action='store_true',
@@ -134,6 +139,13 @@ def main():
     require(not args.completion_observe or args.plugin, '--completion-observe requires --plugin')
     require(sum((args.fps_opt, args.async_fix, args.completion_fix, args.completion_observe)) <= 1,
             'Keep the async creation, FPS and completion-wait experiments separate')
+    # --turnip-range-dedup rewrites the Mesa resource-collection source before the
+    # recorded-series identity check. It is orthogonal to the plugin-level
+    # experiments above and may be combined with them by design (e.g. dedup +
+    # completion-observe): the dedup transform is semantically equivalent, so the
+    # orthogonality here is intentional rather than an unguarded gap. It stays
+    # default-off and is qualified only to host semantic equivalence, not device
+    # behaviour.
     require(sys.platform == 'darwin' and os.environ.get('GITHUB_ACTIONS') == 'true', 'Run only in macOS GitHub Actions')
     device, root, output = args.device.resolve(), args.work.resolve(), args.output.resolve()
     abi = device / 'gpu/upstream/Adreno6xx'
@@ -149,7 +161,8 @@ def main():
     upstream_pins_sha256 = sha(pins_path)
     # build-turnip-darwin.py re-runs the recorded-series identity check, so the nabu patches join the
     # recorded series (after the upstream 19) instead of being applied outside it.
-    for patch in NABU_PATCHES:
+    applied_nabu_patches = NABU_PATCHES + ((RANGE_DEDUP_PATCH,) if args.turnip_range_dedup else ())
+    for patch in applied_nabu_patches:
         recorded = 'patches/mesa/' + Path(patch).name
         require(not (root / recorded).exists(), 'nabu patch name collides with an upstream patch')
         shutil.copyfile(device / patch, root / recorded)
@@ -181,9 +194,10 @@ def main():
     library = root / 'build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib'
     report = dict(unixnu_commit=UNIXNU_COMMIT, mesa_commit=MESA_COMMIT, mesa_tree=MESA_TREE,
                   patches=pins['patches'], patch_sha256={p: sha(root / p) for p in pins['patches']},
-                  nabu_patches={p: sha(device / p) for p in NABU_PATCHES},
+                  nabu_patches={p: sha(device / p) for p in applied_nabu_patches},
                   upstream_pins_sha256=upstream_pins_sha256, recorded_pins_sha256=sha(pins_path),
                   disk_cache=disk_cache, worker_opt=args.worker_opt, turnip_render_mode=args.turnip_render_mode,
+                  turnip_range_dedup=args.turnip_range_dedup,
                   abi_header_sha256=sha(abi / 'NativeAdrenoABI.h'), build_returncode=result.returncode,
                   library_built=library.is_file(), gpu_exercised=False, runtime_qualified=False)
     if library.is_file():

@@ -1,0 +1,105 @@
+Ported from donor commit cb45dcf71cd7381c1d39966e411c3ed69a512fbf,
+path patches/nabu-vulkan/turnip-submit-range-dedup.patch
+(sha256 fe4215dcf29ca625a745ace16cba414a4582a0a59af951da6e5590f9b736d39f).
+Changes vs donor: the NabuTurnipSubmitSpan / nabuTurnipSubmitMarker diagnostic
+spans and the #include <time.h> are removed -- syscall 179 (Darwin kdebug) is
+a stock path on 21H16 with no local consumer for debug-id 0x31ca81fc; the
+NABU_METAL_SUBMIT_TRACE env gate goes with it. Only the exact-triple raw-range
+deduplication (hash then sort-unique, before BO lookup, under the existing
+retirement lock) is kept. Assumed licence BSD-2-Clause-Patent per donor
+convention (the donor nabu-vulkan files carry no SPDX header).
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -2222,6 +2222,77 @@
+    return VK_SUCCESS;
+ }
+ 
++
++/* Exact source ranges can recur in several CS/descriptor-set records. Remove
++ * duplicates while the existing BO retirement lock protects resolution. Do not
++ * merge adjacent/overlapping IOVAs here: they may belong to different BOs. The
++ * native same-handle/access overlap merge remains after reference acquisition. */
++static int
++darwin_raw_range_compare(const void *left, const void *right)
++{
++   const struct tu_resource_range *a = (const struct tu_resource_range *)left;
++   const struct tu_resource_range *b = (const struct tu_resource_range *)right;
++   if (a->iova != b->iova)
++      return a->iova < b->iova ? -1 : 1;
++   if (a->size != b->size)
++      return a->size < b->size ? -1 : 1;
++   return a->access < b->access ? -1 : a->access > b->access;
++}
++
++
++static uint64_t
++darwin_raw_range_hash(const struct tu_resource_range *range)
++{
++   uint64_t hash = range->iova ^ (range->size * UINT64_C(0x9e3779b97f4a7c15)) ^
++                   ((uint64_t)range->access * UINT64_C(0xbf58476d1ce4e5b9));
++   hash = (hash ^ (hash >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
++   hash = (hash ^ (hash >> 27)) * UINT64_C(0x94d049bb133111eb);
++   return hash ^ (hash >> 31);
++}
++
++static VkResult
++darwin_deduplicate_submit_ranges(struct tu_darwin_queue_submit *submit, uint32_t *unique_out)
++{
++   const uint32_t count = util_dynarray_num_elements(&submit->ranges, struct tu_resource_range);
++   *unique_out = count;
++   if (count < 2)
++      return VK_SUCCESS;
++
++   /* The dynarray byte size bounds count. Keep at most 50% load even when every
++    * range differs. Slots hold compacted indices plus one; equality always
++    * checks all three fields, so hash collisions cannot remove distinct ranges. */
++   size_t capacity = 1;
++   while (capacity < (size_t)count * 2)
++      capacity *= 2;
++   uint32_t *slots = (uint32_t *)calloc(capacity, sizeof(*slots));
++   if (!slots)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   struct tu_resource_range *ranges = (struct tu_resource_range *)submit->ranges.data;
++   uint32_t unique = 0;
++   for (uint32_t at = 0; at < count; at++) {
++      const struct tu_resource_range value = ranges[at];
++      size_t slot = darwin_raw_range_hash(&value) & (capacity - 1);
++      while (slots[slot]) {
++         const struct tu_resource_range *previous = &ranges[slots[slot] - 1];
++         if (previous->iova == value.iova && previous->size == value.size &&
++             previous->access == value.access)
++            break;
++         slot = (slot + 1) & (capacity - 1);
++      }
++      if (slots[slot])
++         continue;
++      ranges[unique] = value;
++      slots[slot] = ++unique;
++   }
++   free(slots);
++   /* Preserve GPU231's BO resolution order, sorting only the unique triples. */
++   qsort(ranges, unique, sizeof(*ranges), darwin_raw_range_compare);
++   submit->ranges.size = unique * sizeof(*ranges);
++   *unique_out = unique;
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ darwin_collect_submit_resources(struct tu_device *dev, struct tu_darwin_queue_submit *submit,
+                                 bool legacy)
+@@ -2239,7 +2310,14 @@
+    }
+ 
+    VkResult result = VK_SUCCESS;
++   const uint32_t raw_ranges = util_dynarray_num_elements(&submit->ranges, struct tu_resource_range);
+    pthread_mutex_lock(&retire->lock);
++   uint32_t unique_ranges = raw_ranges;
++   result = darwin_deduplicate_submit_ranges(submit, &unique_ranges);
++   if (result != VK_SUCCESS) {
++      pthread_mutex_unlock(&retire->lock);
++      return result;
++   }
+    util_dynarray_foreach (&submit->ranges, struct tu_resource_range, range) {
+       if (!range->iova || !range->size)
+          continue;

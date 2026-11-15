@@ -612,13 +612,46 @@ def qualify(inputs, headers, files, report, objects=None, patch_dir=None):
                   original_abi_evidence=deepcopy(ABI_EVIDENCE))
     if objects is None:
         return result
-    units = report['translation_units']
-    require(set(objects) == set(units), 'Incomplete network object set')
+    result.update(compiled=True, objects=_qualify_objects(report, objects))
+    return result
+
+
+def _qualify_objects(report, objects):
+    """Check objects only; the caller must first authenticate source and receipt.
+
+    Production callers enter through qualify(). Keeping this check separate also
+    permits an explicitly two-stage replay of historical objects after their
+    original generator has authenticated every source byte and receipt field.
+    """
+    require(isinstance(report, dict) and report.get('version') == VERSION,
+            'Network object receipt version drift')
+    units = report.get('translation_units')
+    require(isinstance(units, dict) and set(units) == set(EXPORTS),
+            'Network object translation unit set drift')
+    generator_sha = report.get('generator_sha256')
+    require(isinstance(generator_sha, str) and re.fullmatch(r'[0-9a-f]{64}', generator_sha),
+            'Network object generator identity drift')
+    require(isinstance(objects, dict) and set(objects) == set(units), 'Incomplete network object set')
     from nabu_idle_ci import _image
     records = {}
     for path, unit in units.items():
+        symbol = '_nabu_wifi_network_unit_' + Path(path).stem.replace('.', '_')
+        expected_exports = ['_' + name for name in EXPORTS[path]] + [symbol]
+        require(isinstance(unit, dict) and unit.get('exports') == expected_exports and
+                unit.get('language') == ('c++' if path.endswith('.cpp') else 'c'),
+                'Network object export contract drift: ' + path)
+        identity = unit.get('source_identity')
+        require(isinstance(identity, str) and re.fullmatch(
+                r'NABUWIFI_NETWORK_UNIT_SHA256=[0-9a-f]{64};GEN=' + generator_sha, identity),
+                'Network object source identity format drift: ' + path)
         content = objects[path]
+        require(isinstance(content, bytes), 'Network object bytes required: ' + path)
         image = _image(content, 1)
+        definitions = [(name, kind) for name, _, kind in image['symbols']
+                       if not kind & 0xe0 and kind & 0xe == 0xe]
+        names = [name for name, _ in definitions]
+        require(len(names) == len(set(names)), 'Duplicate network object definition: ' + path)
+        external = {name for name, kind in definitions if kind & 1}
         offset, deployment = 32, None
         for _ in range(struct.unpack_from('<I', content, 16)[0]):
             command, size = struct.unpack_from('<II', content, offset)
@@ -627,20 +660,21 @@ def qualify(inputs, headers, files, report, objects=None, patch_dir=None):
                 deployment = struct.unpack_from('<II', content, offset + 8)
             offset += size
         require(deployment == (2, 0x110000), 'Network object needs the current iOS17 deployment: ' + path)
-        require(set(unit['exports']) <= set(image['names']), 'Missing network object exports: ' + path)
+        require(set(unit['exports']) <= external, 'Missing network object external exports: ' + path)
         require(unit['source_identity'].encode() in content, 'Network compiled source identity mismatch: ' + path)
         defined = set(image['names'])
         require(not any(name.startswith(('_gic_v3_', '_hakios_wifi_', '_lx_start', '_lx_stop', '_lx_prepare',
                                         '_lx_transmit', '_nabu_ath10k_os_')) for name in defined),
                 'Network host object defines an external platform/backend hook')
         if path.endswith('hakios.lx.c'):
-            require({name for name in defined if name.startswith('_lx_os_')} == set(unit['exports']) -
+            # Typed allocation macros emit local data names such as
+            # _lx_os_alloc.site. Only external definitions expose platform hooks.
+            require({name for name in external if name.startswith('_lx_os_')} == set(unit['exports']) -
                     {name for name in unit['exports'] if name.startswith('_nabu_wifi_network_unit_')},
                     'LinuxKPI host object has unexpected platform hooks')
         records[path] = dict(sha256=sha(content), exports=unit['exports'],
                              constructors=[name for name in defined if 'GLOBAL__sub_I_' in name])
-    result.update(compiled=True, objects=records)
-    return result
+    return records
 
 
 def main():

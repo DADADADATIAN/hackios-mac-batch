@@ -316,6 +316,10 @@ def main():
         raise SystemExit('This archive is only built for the UFS profile')
     if os.environ.get('NABU_UFS_READONLY', '0') == '1':
         raise SystemExit('The read-only service cannot publish verified root windows')
+    from nabu_backlight_source import power_build_enabled
+    import tomllib
+    profile = tomllib.loads((device / 'board.toml').read_text())['kernel']['defconfig']
+    backlight_power = power_build_enabled(os.environ, profile)
 
     recipe_path = root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'
     recipe_bytes = recipe_path.read_bytes()
@@ -343,6 +347,7 @@ def main():
     radio = os.environ.get('NABU_WIFI_RADIO') == '1'
     ath10k = os.environ.get('NABU_WIFI_ATH10K') == '1'
     hall = os.environ.get('NABU_HALL_SENSOR') == '1'
+    backlight = os.environ.get('NABU_BACKLIGHT') == '1'
     if ath10k and not radio:
         raise SystemExit('The ath10k backend requires the owned WLAN radio domain')
     native_network = None
@@ -456,6 +461,18 @@ def main():
         if text.count(anchor) != 1:
             raise ValueError('Expected the single UFS root startup hook')
         cpp.write_text(text.replace(anchor, '  nabu_hall_start();\n' + anchor, 1), encoding='utf-8')
+    backlight_sources = {}
+    if backlight:
+        for path in sorted((device / 'platform').glob('NabuBacklight*')):
+            target = source / 'platform' / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(path.read_bytes())
+            backlight_sources['platform/' + path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        text = '#include "platform/NabuBacklight.h"\n' + cpp.read_text(encoding='utf-8')
+        anchor = '  native_ufs_root_step = 2;\n'
+        if text.count(anchor) != 1:
+            raise ValueError('Expected the single UFS root startup hook')
+        cpp.write_text(text.replace(anchor, '  nabu_backlight_start();\n' + anchor, 1), encoding='utf-8')
     obj = out / 'NativeUfs.o'
     command = platform.compile_command(record, cpp, obj)
     command += ['-I', str(headers), '-I', str(root / '.cache/xnu-work/osfmk'),
@@ -516,6 +533,25 @@ def main():
         hall_objects.append(hall_obj)
         hall_build[path.name] = dict(source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                                      object_sha256=hashlib.sha256(hall_obj.read_bytes()).hexdigest())
+    backlight_objects = []
+    backlight_build = {}
+    if backlight:
+        path = source / 'platform/NabuBacklight.cpp'
+        backlight_obj = out / 'NabuBacklight.o'
+        backlight_command = platform.compile_command(record, path, backlight_obj)
+        backlight_command += ['-I', str(root / '.cache/xnu-work/osfmk'), '-DXNU_NABU_BACKLIGHT=1',
+                              '-DXNU_NABU_BACKLIGHT_POWER=' + str(int(backlight_power))]
+        (out / 'NabuBacklight-compile-command.json').write_text(
+            json.dumps(backlight_command, indent=2) + '\n', encoding='utf-8')
+        result = subprocess.run(backlight_command, cwd=record['directory'], capture_output=True)
+        (out / 'NabuBacklight-compile.log').write_bytes(result.stdout + result.stderr)
+        if result.returncode:
+            raise SystemExit(result.stderr.decode('utf-8', errors='replace')[-6000:])
+        platform.check_object(backlight_obj.read_bytes())
+        backlight_objects.append(backlight_obj)
+        backlight_build[path.name] = dict(
+            source_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            object_sha256=hashlib.sha256(backlight_obj.read_bytes()).hexdigest())
 
     # VirtIO's original-bindings.o is the single provider of the absolute
     # IOBlockStorageDevice aliases in this combined profile. Keep the UFS
@@ -538,7 +574,8 @@ def main():
 
     archive = out / 'libNativeUfs.a'
     subprocess.run(['xcrun', 'ar', 'rcs', str(archive), str(obj), str(compat_obj),
-                    *map(str, wifi_objects), *map(str, hall_objects), *map(str, native_objects)], check=True)
+                    *map(str, wifi_objects), *map(str, hall_objects),
+                    *map(str, backlight_objects), *map(str, native_objects)], check=True)
     (out / 'build-report.json').write_text(json.dumps({
         'source_commit': prepare.PINNED_COMMIT,
         'source_files': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
@@ -563,6 +600,12 @@ def main():
                          'runtime_qualified': False},
         'hall_sensor': {'enabled': hall, 'default': 'off', 'sources': hall_sources,
                         'objects': hall_build, 'runtime_qualified': False},
+        'backlight': {'enabled': backlight, 'default': 'off',
+                      'power_arg_reserved': not backlight_power,
+                      'power_hook_compiled': backlight_power,
+                      'power_hook': 'legacy_sync_ack' if backlight_power else 'not_wired',
+                      'sources': backlight_sources, 'objects': backlight_build,
+                      'runtime_qualified': False},
         'solid_state_media': nabu_storage_media.metadata('ufs', cpp.read_text(encoding='utf-8')),
         'hardware_tested': False, 'runtime_qualified': False,
     }, indent=2) + '\n', encoding='utf-8')

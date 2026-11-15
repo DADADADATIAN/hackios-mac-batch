@@ -108,6 +108,9 @@ def qualify_display_candidate(upstream, device, candidate, expected_profile=None
     report = json.loads((out / 'build-report.json').read_text())
     cpu = report.get('cpu_present') is True
     discovery = report.get('discovery_only') is True
+    backlight_power = report.get('backlight_power_hook_compiled', False)
+    if type(backlight_power) is not bool:
+        raise ValueError('Backlight display intent must be Boolean')
     profile = tomllib.loads((device / 'board.toml').read_text())['kernel']['defconfig']
     if (profile not in DISPLAY_PROFILES or report.get('profile') != profile or
             (expected_profile is not None and profile != expected_profile) or
@@ -131,6 +134,11 @@ def qualify_display_candidate(upstream, device, candidate, expected_profile=None
         raise ValueError('CPU pixel implementation changed')
     if cpu and sha(out / 'source/NabuDisplaySwapState.h') != sha(device / 'platform/NabuDisplaySwapState.h'):
         raise ValueError('Display queue state implementation changed')
+    if cpu and 'backlight_power_hook_compiled' in report and (
+            sha(out / 'source/NabuBacklightPower.h') != sha(device / 'platform/NabuBacklightPower.h')):
+        raise ValueError('Backlight power gate header changed')
+    if backlight_power and (not cpu or profile not in HARDWARE_CPU_PROFILES):
+        raise ValueError('Backlight power requires hardware CPU display')
     scanout = report.get('gpu_scanout_handoff_compiled') is True
     if 'gpu_scanout_handoff_compiled' in report and scanout != (cpu and profile == HARDWARE_GPU_METAL_PROFILE):
         raise ValueError('GPU scanout hand-off compiled in the wrong profile')
@@ -154,6 +162,11 @@ def qualify_display_candidate(upstream, device, candidate, expected_profile=None
         forbidden = '-DNABU_LEGACY_DISCOVERY_ONLY=1' if cpu else '-DNABU_LEGACY_CPU_PRESENT=1'
         if any(flag not in command for flag in required) or forbidden in command:
             raise ValueError('Display object has the wrong implementation compile flags')
+        if cpu and 'backlight_power_hook_compiled' in report:
+            from nabu_backlight_ci import compile_gate
+            compile_gate(command, 'XNU_NABU_BACKLIGHT_POWER', backlight_power)
+            if backlight_power:
+                compile_gate(command, 'XNU_NABU_BACKLIGHT', True)
         if ('-DNABU_LEGACY_GPU_SCANOUT=1' in command) != scanout:
             raise ValueError('Display object has the wrong scanout compile flag')
     for name, digest in report['source_sha256'].items():
@@ -193,7 +206,21 @@ def qualify_display_candidate(upstream, device, candidate, expected_profile=None
     for index, name in enumerate(report['vtable_symbols']):
         if slots[index] != symbols.get(name):
             raise ValueError(f'Final display dispatch mismatch at slot {index}: {name}')
+    if backlight_power:
+        from nabu_backlight_ci import qualify, UFS
+        output = upstream / 'out/nabu'
+        read = lambda name: (output / name.removeprefix('outputs/')).read_bytes()
+        if json.loads(read(UFS + 'build-report.json')).get('backlight', {}).get('power_hook_compiled') is not True:
+            raise ValueError('Display power hook lacks the UFS power implementation')
+        power_intent = dict(runtime_qualified=False, power_hook_compiled=True,
+                            display_source_sha256=sha(device / 'platform/NabuLegacyCpuPresent.cpp'),
+                            sources={path.relative_to(device).as_posix(): sha(path)
+                                     for path in sorted((device / 'platform').glob('NabuBacklight*'))})
+        qualify(read, raw, power_intent)
+    elif '_nabu_backlight_power_transition' in symbols:
+        raise ValueError('Disabled display power hook exists in the final candidate')
     return {'profile': profile, 'mode': 'cpu_present' if cpu else 'discovery_only', 'reference': REFERENCE,
+            'backlight_power_hook_compiled': backlight_power,
             'archive_sha256': report['archive_sha256'], 'aliases_verified': len(aliases),
             'vtable_slots_verified': 358, 'candidate_sha256': sha(candidate),
             'pixel_transfer_enabled': cpu, 'pixel_transfer_runtime_observed': False,

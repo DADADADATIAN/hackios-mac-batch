@@ -3,6 +3,7 @@
 #include "OriginalLegacyFramebufferABI.h"
 #include "NabuLegacyCpuPixels.h"
 #include "NabuDisplaySwapState.h"
+#include "NabuBacklightPower.h"
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/pwr_mgt/IOPM.h>
@@ -357,6 +358,11 @@ public:
         native_legacy_pm_observed(3, kIOReturnSuccess, ordinal);
         IOReturn status = IOMobileFramebufferLegacy::setPowerState(ordinal, device);
         native_legacy_pm_observed(4, status, ordinal);
+#if XNU_NABU_BACKLIGHT_POWER
+        // Optional backlight side effect; preserve the parent's PM state and
+        // ACK exactly, including any asynchronous completion budget.
+        nabu_backlight_power_transition(ordinal, primary, status);
+#endif
         return status;
     }
     void registerService(IOOptionBits options = 0) override {

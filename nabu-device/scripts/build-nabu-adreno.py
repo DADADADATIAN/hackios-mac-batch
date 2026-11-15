@@ -28,6 +28,10 @@ CPP = (
     'NativeAdrenoA6xxHwInit', 'NativeAdrenoA6xxSmmu', 'NativeAdrenoA6xxZap',
     'NativeAdrenoService', 'NativeAdrenoSha256', 'NativeAdrenoGpuProfile', 'NabuGpuResources',
 )
+# The optional read-only DPU snapshot lives under device/platform; its sources
+# are always staged and inventoried, but the unit is only compiled when the
+# NABU_DPU_SNAPSHOT=1 environment gate is set by the prepared kernel build.
+DPU_SNAPSHOT_SOURCES = ('platform/NabuDpuSnapshot.h', 'platform/NabuDpuSnapshot.cpp')
 # Publication path. NativeAdrenoTimer is required: NativeAdrenoUserClient reads the
 # always-on counter through it, so dropping it leaves a link gap.
 METAL_CPP = (
@@ -65,6 +69,10 @@ def source_inventory(device, metal=False):
     paths = sorted(p for p in gpu.rglob('*') if p.is_file() and
                    (p.suffix in SAFE_SUFFIXES or p.name in SAFE_NAMES))
     paths.append(device / 'scripts/build-nabu-adreno.py')
+    for name in DPU_SNAPSHOT_SOURCES:
+        path = device / name
+        if path.is_file():
+            paths.append(path)
     if metal:
         paths.append(device / BINDINGS_SCRIPT)
     if any(p.is_symlink() for p in paths):
@@ -137,6 +145,7 @@ def main():
     if sys.platform != 'darwin':
         raise SystemExit('Apple archive compilation runs in the macOS GitHub Actions workflow')
     metal = os.environ.get('NABU_GPU_METAL') == '1'
+    dpu_snapshot = os.environ.get('NABU_DPU_SNAPSHOT') == '1'
     userprobe = os.environ.get('NABU_GPU_USERPROBE') == '1'
     if userprobe and not metal:
         raise SystemExit('GPU userprobe boot support is not part of the diagnostic profile')
@@ -171,6 +180,11 @@ def main():
             if path.is_file() and path.suffix in SAFE_SUFFIXES:
                 shutil.copyfile(path, staged / path.name)
     (staged / 'NabuGpuBuild.h').write_text('#define NABU_GPU_SOURCE_ID "' + identity + '"\n', encoding='utf-8')
+    # Stage the optional platform diagnostic beside the flat merged sources;
+    # staging is unconditional so its manifest entry is stable across profiles.
+    for name in DPU_SNAPSHOT_SOURCES:
+        path = device / name
+        shutil.copyfile(path, staged / path.name)
     logging_headers = {}
     for name in ('NabuLogCore.h', 'NabuLogFormat.h'):
         path = device / 'ufs' / name
@@ -187,6 +201,8 @@ def main():
     c_sources = sorted(p.name for p in (device / 'gpu/upstream/ArmSmmu4K').glob('*.c'))
     c_sources += ['AdrenoPM4.c', 'NabuGpuStart.c']
     units = [(name + '.cpp', 'cpp') for name in (CPP + METAL_CPP if metal else CPP)]
+    if dpu_snapshot:
+        units.append(('NabuDpuSnapshot.cpp', 'cpp'))
     units += [(name, 'c') for name in c_sources]
     objects, commands, reports = [], {}, {}
     for name, language in units:
@@ -199,10 +215,15 @@ def main():
             # Selects the publication path in the A640 overlay. The diagnostic
             # archive must not compile it, because it links none of those objects.
             command.append('-DNABU_GPU_METAL=1')
+        if dpu_snapshot and source.stem == 'NabuDpuSnapshot':
+            command.append('-DXNU_NABU_DPU_SNAPSHOT=1')
         result = subprocess.run(command, cwd=record['directory'], capture_output=True)
         (out / (source.stem + '.log')).write_bytes(result.stdout + result.stderr)
         commands[source.stem] = command
         (out / 'compile-command.json').write_text(json.dumps(commands, indent=2) + '\n')
+        if source.stem == 'NabuDpuSnapshot':
+            (out / 'NabuDpuSnapshot-compile-command.json').write_text(
+                json.dumps(command, indent=2) + '\n', encoding='utf-8')
         if any(recipes[key].read_bytes() != data for key, data in raw.items()):
             raise SystemExit('GPU build modified an original XNU compile record')
         if result.returncode:
@@ -273,6 +294,18 @@ def main():
               'kernelcache': str(kernelcache), 'kernelcache_sha256': kernelcache_sha,
               'metal_accelerator': metal, 'runtime_qualified': False, 'hardware_tested': False,
               'gpu_userprobe_boot_support': userprobe,
+              'dpu_snapshot': {'enabled': dpu_snapshot, 'default': 'off',
+                               'boot_arg': 'nabu-dpu-snapshot=1',
+                               'depth_arg': 'nabu-dpu-smmu-depth',
+                               'smmu_depth_max': 0, 'read_only': True,
+                               'call_site': 'NativeAdrenoGpuContext::bringUp tail',
+                               'sources': {name: sha((device / name).read_bytes())
+                                           for name in DPU_SNAPSHOT_SOURCES},
+                               'objects': (reports.get('NabuDpuSnapshot') and
+                                           {'NabuDpuSnapshot': {
+                                               'source_sha256': reports['NabuDpuSnapshot']['source_sha256'],
+                                               'object_sha256': reports['NabuDpuSnapshot']['sha256']}} or {}),
+                               'runtime_qualified': False},
               'requires_pmap_64bit': True, 'pmap_sync_64bit_verified': True,
               'pmap_source_sha256': sha(pmap_bytes), 'startup': 'EARLY_BOOT thread; wait IOBSD',
               'trigger': 'nabu-gpu=1', 'irq_mode': 'synchronous worker polling',

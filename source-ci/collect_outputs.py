@@ -126,7 +126,8 @@ def selected_files(upstream):
                 add(path, path.relative_to(work))
             elif relative == 'native-ufs' and (path.suffix in ('.cpp', '.h') or
                                                path.name in ('NativeUfs.o', 'compile.log') or
-                                               path.name.startswith(('NabuWifi', 'NabuHall')) and path.suffix in ('.o', '.log', '.json')):
+                                               path.name.startswith(('NabuWifi', 'NabuHall', 'NabuBacklight')) and
+                                               path.suffix in ('.o', '.log', '.json')):
                 add(path, path.relative_to(work))
             elif relative == 'native-ram-block' and path.name in (
                     'NativeRamBlock.o', 'NativeRamBlock.cpp', 'compile.log', 'NabuGpuUserprobeAddon.h', 'PersistOverlay.h', 'DirectDisk.h'):
@@ -300,6 +301,14 @@ def selected_sources(device):
                 for p in sorted((device / 'patches').glob('nabu-wifi-network-*.patch'))]
     sources += [(source_dir / 'nabu_hall_ci.py', 'source-ci/nabu_hall_ci.py')]
     sources += [(p, 'device/platform/' + p.name) for p in sorted((device / 'platform').glob('NabuHall*'))]
+    sources += [(source_dir / 'nabu_backlight_ci.py', 'source-ci/nabu_backlight_ci.py')]
+    sources += [(p, 'device/platform/' + p.name)
+                for p in sorted((device / 'platform').glob('NabuBacklight*'))]
+    sources += [(device / 'scripts/nabu_backlight_source.py',
+                 'device/scripts/nabu_backlight_source.py')]
+    sources += [(source_dir / 'nabu_dpu_snapshot_ci.py', 'source-ci/nabu_dpu_snapshot_ci.py')]
+    sources += [(device / 'platform' / name, 'device/platform/' + name)
+                for name in ('NabuDpuSnapshot.h', 'NabuDpuSnapshot.cpp')]
     sources += [(device / 'scripts/nabu_hall_source.py', 'device/scripts/nabu_hall_source.py')]
     sources += [(device / 'scripts/nabu_capture_source.py', 'device/scripts/nabu_capture_source.py'),
                 (device / 'platform/NabuUsbProbe.cpp', 'device/platform/NabuUsbProbe.cpp'),
@@ -466,6 +475,18 @@ def main():
                 from nabu_hall_ci import qualify_candidate as qualify_hall
                 manifest['hall_qualification'] = qualify_hall(args.upstream, args.device, candidate, prepared)
                 summary['hall_qualified_statically'] = manifest['hall_qualification']['compiled']
+            if prepared.get('backlight') is not None:
+                from nabu_backlight_ci import qualify_candidate as qualify_backlight
+                manifest['backlight_qualification'] = qualify_backlight(
+                    args.upstream, args.device, candidate, prepared)
+                summary['backlight_qualified_statically'] = (
+                    manifest['backlight_qualification']['compiled'])
+            if prepared.get('dpu_snapshot') is not None:
+                from nabu_dpu_snapshot_ci import qualify_candidate as qualify_dpu
+                manifest['dpu_snapshot_qualification'] = qualify_dpu(
+                    args.upstream, args.device, candidate, prepared)
+                summary['dpu_snapshot_qualified_statically'] = (
+                    manifest['dpu_snapshot_qualification']['compiled'])
             manifest['data_skeleton_qualification'] = qualify_data_skeleton(
                 args.upstream, prepared.get('data_skeleton'), capture_logs=bool(identity['log_capture']))
             summary['data_skeleton_qualified_statically'] = bool(

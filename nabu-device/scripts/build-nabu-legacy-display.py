@@ -112,6 +112,8 @@ def main():
     root = Path(__file__).resolve().parents[1]
     device = Path(os.environ['UNIXNU_DEVICE'])
     profile = tomllib.loads((device / 'board.toml').read_text())['kernel']['defconfig']
+    from nabu_backlight_source import power_build_enabled
+    backlight_power = power_build_enabled(os.environ, profile)
     kernelcache = Path(os.environ['UNIXNU_KERNELCACHE'])
     reference = os.environ.get('UNIXNU_DISPLAY_REFERENCE')
     if not reference:
@@ -138,6 +140,7 @@ def main():
         shutil.copy2(device / 'platform/NabuLegacyCpuPresent.cpp', source / 'NativeLegacyDisplay.cpp')
         shutil.copy2(device / 'platform/NabuLegacyCpuPixels.h', source / 'NabuLegacyCpuPixels.h')
         shutil.copy2(device / 'platform/NabuDisplaySwapState.h', source / 'NabuDisplaySwapState.h')
+        shutil.copy2(device / 'platform/NabuBacklightPower.h', source / 'NabuBacklightPower.h')
         if scanout:
             for name in ('NabuGpuScanoutHandoff.h', 'NabuGpuScanoutWire.h'):
                 shutil.copy2(device / 'platform' / name, source / name)
@@ -184,6 +187,10 @@ def main():
             raise SystemExit('CPU presentation requires the original limited ABI contract')
         includes += ['-DNABU_LEGACY_CPU_PRESENT=1', '-DNABU_LEGACY_CPU_ABI_VERIFIED=1',
                      '-DNABU_KEYBAG_RAM_DATA_VERIFIED=1']
+    if cpu:
+        includes.append('-DXNU_NABU_BACKLIGHT_POWER=' + str(int(backlight_power)))
+        if backlight_power:
+            includes.append('-DXNU_NABU_BACKLIGHT=1')
     if scanout:
         includes.append('-DNABU_LEGACY_GPU_SCANOUT=1')
     if producer_watch:
@@ -273,6 +280,7 @@ def main():
         'reference_candidate_sha256': sha(reference),
         'discovery_only': discovery,
         'cpu_present': cpu,
+        'backlight_power_hook_compiled': backlight_power,
         'gpu_scanout_handoff_compiled': scanout,
         'producer_thread_watch_compiled': producer_watch,
         'ephemeral_notification_transport_compiled': cpu,

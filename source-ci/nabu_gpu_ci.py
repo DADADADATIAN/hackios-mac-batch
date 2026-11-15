@@ -124,9 +124,18 @@ def relative(name):
     return path
 
 
+# The optional read-only DPU snapshot is a platform/ input to the adreno
+# archive only; no other platform file may enter the GPU source manifest.
+DPU_SNAPSHOT_SOURCES = {'platform/NabuDpuSnapshot.h', 'platform/NabuDpuSnapshot.cpp'}
+DPU_SNAPSHOT_STEM = 'NabuDpuSnapshot'
+DPU_SNAPSHOT_ENTRY = '_nabu_dpu_snapshot_once'
+
+
 def public_source(name):
     path = relative(name)
-    return path.parts[0] == 'gpu' and (path.suffix in SOURCE_SUFFIXES or path.name in SOURCE_NAMES)
+    return ((path.parts[0] == 'gpu' and
+             (path.suffix in SOURCE_SUFFIXES or path.name in SOURCE_NAMES)) or
+            name in DPU_SNAPSHOT_SOURCES)
 
 
 def source_identity(sources):
@@ -502,6 +511,24 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
     sources = report.get('sources')
     require(isinstance(sources, dict) and 0 < len(sources) <= 1024 and
             set(sources) == set(source_names), 'GPU source inventory mismatch')
+    dpu_block = report.get('dpu_snapshot')
+    if dpu_block is None:
+        # Evidence from before the D1 port has no block; that is the disabled
+        # shape. A present block must carry the full contract.
+        dpu_block = {}
+    require(isinstance(dpu_block, dict) and dpu_block.get('default', 'off') == 'off' and
+            dpu_block.get('boot_arg', 'nabu-dpu-snapshot=1') == 'nabu-dpu-snapshot=1' and
+            dpu_block.get('smmu_depth_max', 0) == 0 and dpu_block.get('read_only', True) is True and
+            dpu_block.get('runtime_qualified', False) is False,
+            'GPU DPU snapshot block contract changed')
+    if dpu_block:
+        require(DPU_SNAPSHOT_SOURCES <= set(sources) and
+                dpu_block.get('sources') == {name: sources.get(name)
+                                             for name in DPU_SNAPSHOT_SOURCES},
+                'GPU DPU snapshot source binding mismatch')
+    dpu_enabled = dpu_block.get('enabled') is True
+    if dpu_enabled:
+        required_objects = required_objects | {DPU_SNAPSHOT_STEM}
     scripts = source_scripts(profile)
     require(set(scripts) <= set(sources), 'GPU source inventory lacks an actual build/bindings script')
     source_bytes = {}
@@ -523,6 +550,8 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
             continue
         choices = ['gpu/' + prefix + '/' + path.name for prefix in
                    ('nabu', 'a640', 'upstream/AdrenoPM4', 'upstream/ArmSmmu4K', 'upstream/Adreno6xx')]
+        if name in DPU_SNAPSHOT_SOURCES:
+            choices.append('platform/' + path.name)
         selected = next((choice for choice in choices if choice in sources), None)
         require(selected is not None, 'GPU header outside merged source directories')
         require(read(OUTPUT + 'source/' + path.name) == source_bytes[selected],
@@ -531,6 +560,9 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
     commands = json_object(read(OUTPUT + 'compile-command.json'))
     require(set(commands) == required_objects and all(isinstance(command, list) and command
             for command in commands.values()), 'GPU compile command inventory mismatch')
+    if dpu_enabled:
+        require('-DXNU_NABU_DPU_SNAPSHOT=1' in commands[DPU_SNAPSHOT_STEM],
+                'DPU snapshot unit lacks its compile gate')
     logging = report.get('logging_headers')
     require(isinstance(logging, dict) and {'ufs/NabuLogCore.h', 'ufs/NabuLogFormat.h'} <= set(logging),
             'GPU checkpoint logging header identities are absent')
@@ -569,6 +601,8 @@ def qualify_gpu_bundle(read, candidate, source_names, profile=PROFILE):
                 'Invalid merged GPU source path')
         choices = [prefix + path.name for prefix in ('gpu/nabu/', 'gpu/a640/',
                    'gpu/upstream/AdrenoPM4/', 'gpu/upstream/ArmSmmu4K/', 'gpu/upstream/Adreno6xx/')]
+        if 'platform/' + path.name in DPU_SNAPSHOT_SOURCES:
+            choices.append('platform/' + path.name)
         selected = next((name for name in choices if name in sources), None)
         require(selected is not None, 'GPU object source is not inventoried: ' + stem)
         merged = read(OUTPUT + path.as_posix())
@@ -641,5 +675,7 @@ def qualify_gpu_candidate(upstream, device, candidate, expected_profile=PROFILE)
 
     names = [p.relative_to(device).as_posix() for p in sorted((device / 'gpu').rglob('*'))
              if p.is_file() and public_source(p.relative_to(device).as_posix())]
+    names += [name for name in sorted(DPU_SNAPSHOT_SOURCES)
+              if (device / name).is_file()]
     names.extend(source_scripts(expected_profile))
     return qualify_gpu_bundle(read, candidate.read_bytes(), names, expected_profile)
