@@ -236,7 +236,7 @@ jobs:
           echo "UNIXNU_DISPLAY_REFERENCE=$RUNNER_TEMP/display-reference/kernel.macho" >> "$GITHUB_ENV"
       - name: Install host tools
         run: |
-          brew install llvm lld mtools dtc
+          brew install llvm lld mtools dtc ripgrep
           if ! command -v unifdef >/dev/null; then
             brew install unifdef
             echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
