@@ -62,7 +62,7 @@ bool selectMac(const uint8_t *source, size_t bytes, const uint8_t pin[32],
 } // namespace NabuWifiService
 
 namespace {
-IOLock *gate;
+IOLock *serviceGate;
 IOLock *owner;
 uint32_t initialized;
 uint32_t fatal;
@@ -104,7 +104,7 @@ bool initialize()
         __atomic_store_n(&initialized, 0, __ATOMIC_RELEASE);
         return false;
     }
-    gate = newGate;
+    serviceGate = newGate;
     owner = newOwner;
     __atomic_store_n(&initialized, 2, __ATOMIC_RELEASE);
     return true;
@@ -149,7 +149,7 @@ bool readIdentity(NabuWifiService::MacIdentity &identity)
 
 /* Gate is held for short admission/publication changes. The network host's
  * link-state function posts the kernel link event and makes no backend calls.
- * Publication order is host sta_publish -> gate for join/lost/fatal paths. */
+ * Publication order is host sta_publish -> serviceGate for join/lost/fatal paths. */
 void closeLocked()
 {
     ++connection;
@@ -161,10 +161,10 @@ void closeLocked()
 
 void closeAndDrainPackets()
 {
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     closeLocked();
-    while (txActive || rxActive) IOLockSleep(gate, &txActive, THREAD_UNINT);
-    IOLockUnlock(gate);
+    while (txActive || rxActive) IOLockSleep(serviceGate, &txActive, THREAD_UNINT);
+    IOLockUnlock(serviceGate);
 }
 
 /* Every backend call, including state/channels/heard, pins the offered owner.
@@ -177,22 +177,22 @@ struct BackendCall {
 
     BackendCall()
     {
-        IOLockLock(gate);
+        IOLockLock(serviceGate);
         if (valid && !__atomic_load_n(&fatal, __ATOMIC_ACQUIRE)) {
             ops = backendOps;
             identity = backendIdentity;
             generation = ::generation;
             ++backendActive;
         }
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
     }
     ~BackendCall()
     {
         if (!identity) return;
-        IOLockLock(gate);
+        IOLockLock(serviceGate);
         --backendActive;
-        IOLockWakeup(gate, &backendActive, false);
-        IOLockUnlock(gate);
+        IOLockWakeup(serviceGate, &backendActive, false);
+        IOLockUnlock(serviceGate);
     }
     bool currentLocked() const
     {
@@ -201,9 +201,9 @@ struct BackendCall {
     }
     bool current() const
     {
-        IOLockLock(gate);
+        IOLockLock(serviceGate);
         bool result = currentLocked();
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         return result;
     }
     BackendCall(const BackendCall &) = delete;
@@ -214,51 +214,51 @@ void transmitWorker(void *)
 {
     Frame frame;
     for (;;) {
-        IOLockLock(gate);
-        while (!queueCount) IOLockSleep(gate, &queueCount, THREAD_UNINT);
+        IOLockLock(serviceGate);
+        while (!queueCount) IOLockSleep(serviceGate, &queueCount, THREAD_UNINT);
         frame = queue[queueHead];
         queueHead = (queueHead + 1) % NabuWifiService::QueueCapacity;
         --queueCount;
         if (!valid || !committed || frame.connection != connection ||
             __atomic_load_n(&fatal, __ATOMIC_ACQUIRE)) {
             ++txDropped;
-            IOLockUnlock(gate);
+            IOLockUnlock(serviceGate);
             continue;
         }
         ++txActive;
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         int error = nabu_ath10k_driver_transmit(frame.bytes, frame.length);
-        IOLockLock(gate);
+        IOLockLock(serviceGate);
         ++txReturned;
         if (error) ++txErrors;
         --txActive;
-        IOLockWakeup(gate, &txActive, false);
-        IOLockUnlock(gate);
+        IOLockWakeup(serviceGate, &txActive, false);
+        IOLockUnlock(serviceGate);
     }
 }
 
 bool transmit(mbuf_t packet, size_t length)
 {
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     if (!packet || !valid || !committed || !workerStarted ||
         __atomic_load_n(&fatal, __ATOMIC_ACQUIRE) || length < 14 ||
         length > HAKIOS_NET_FRAME_MAX || queueCount == NabuWifiService::QueueCapacity) {
         ++txDropped;
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         return false;
     }
     Frame &frame = queue[(queueHead + queueCount) % NabuWifiService::QueueCapacity];
     if (mbuf_copydata(packet, 0, length, frame.bytes)) {
         ++txDropped;
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         return false;
     }
     frame.length = length;
     frame.connection = connection;
     ++queueCount;
     ++txAccepted;
-    IOLockWakeup(gate, &queueCount, false);
-    IOLockUnlock(gate);
+    IOLockWakeup(serviceGate, &queueCount, false);
+    IOLockUnlock(serviceGate);
     return true;
 }
 
@@ -294,7 +294,7 @@ struct JoinCommit {
 bool commitJoin(void *context)
 {
     const auto *join = static_cast<const JoinCommit *>(context);
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     bool accept = join->call->currentLocked() && joining && pendingUp &&
         connection == join->connection;
     if (accept) {
@@ -302,7 +302,7 @@ bool commitJoin(void *context)
         joining = pendingUp = false;
         hakios_net_link_state(true);
     }
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     return accept;
 }
 
@@ -314,10 +314,10 @@ int stationJoin(const hakios_sta_join *request)
     if (request->security != HAKIOS_STA_WPA2_PSK) return EOPNOTSUPP;
     BackendCall call;
     if (!call.identity) return ENXIO;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     joining = call.currentLocked();
     JoinCommit join{&call, connection};
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     int error = call.ops.join(request);
     struct hakios_sta_state state{};
     call.ops.state(&state);
@@ -346,11 +346,11 @@ void stationState(struct hakios_sta_state *state)
     *state = {};
     BackendCall call;
     if (!call.identity) { state->last_error = ENXIO; return; }
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     uint64_t observedConnection = connection;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     call.ops.state(state);
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     if (!call.currentLocked()) {
         *state = {};
         state->last_error = ENXIO;
@@ -359,7 +359,7 @@ void stationState(struct hakios_sta_state *state)
         *state = {};
         state->phase = HAKIOS_STA_IDLE;
     }
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 
 unsigned stationChannels(hakios_sta_channel *channels, unsigned capacity)
@@ -374,19 +374,19 @@ unsigned stationChannels(hakios_sta_channel *channels, unsigned capacity)
 
 void withdraw()
 {
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     valid = false;
     ++generation;
     closeLocked();
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     hakios_sta_attach(nullptr);
-    IOLockLock(gate);
-    while (backendActive) IOLockSleep(gate, &backendActive, THREAD_UNINT);
-    while (txActive || rxActive) IOLockSleep(gate, &txActive, THREAD_UNINT);
+    IOLockLock(serviceGate);
+    while (backendActive) IOLockSleep(serviceGate, &backendActive, THREAD_UNINT);
+    while (txActive || rxActive) IOLockSleep(serviceGate, &txActive, THREAD_UNINT);
     backendIdentity = nullptr;
     backendOps = {};
     backendAddressPresent = false;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 } // namespace
 
@@ -406,9 +406,9 @@ extern "C" void nabu_wlan_service_publish()
 {
     if (!initialize()) return;
     IOLockLock(owner);
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     bool unavailable = published || __atomic_load_n(&fatal, __ATOMIC_ACQUIRE);
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     if (unavailable) { IOLockUnlock(owner); return; }
     NabuWifiService::MacIdentity identity;
     if (!readIdentity(identity)) {
@@ -420,9 +420,9 @@ extern "C" void nabu_wlan_service_publish()
     if (!queue) { IOLockUnlock(owner); return; }
     if (!workerStarted) {
         bool started = lx_os_thread("nabu-wlan-tx", transmitWorker, nullptr) == 0;
-        IOLockLock(gate);
+        IOLockLock(serviceGate);
         workerStarted = started;
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
     }
     if (!workerStarted) { IOLockUnlock(owner); return; }
     if (__atomic_load_n(&fatal, __ATOMIC_ACQUIRE)) { IOLockUnlock(owner); return; }
@@ -433,9 +433,9 @@ extern "C" void nabu_wlan_service_publish()
     link.up = false;
     link.transmit = transmit;
     bool attached = hakios_net_attach(&link);
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     published = attached;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     IOLog("NABU WLAN SERVICE: en0 attached=%u permanent-source-bound=1\n", attached);
     IOLockUnlock(owner);
 }
@@ -443,10 +443,10 @@ extern "C" void nabu_wlan_service_publish()
 extern "C" void nabu_ath10k_os_net_attach(const unsigned char *address)
 {
     if (!initialize()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     backendAddressPresent = address != nullptr;
     if (address) memcpy(backendAddress, address, 6);
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 
 extern "C" void nabu_ath10k_os_station(const hakios_sta_ops *ops)
@@ -460,15 +460,15 @@ extern "C" void nabu_ath10k_os_station(const hakios_sta_ops *ops)
     }
     if (!ops->power || !ops->scan || !ops->heard || !ops->join || !ops->leave ||
         !ops->state || !ops->channels) { IOLockUnlock(owner); return; }
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     bool acceptable = published && !valid && !backendIdentity && backendAddressPresent &&
         !memcmp(link.address, backendAddress, 6) && !memcmp(link.address, ops->address, 6) &&
         !__atomic_load_n(&fatal, __ATOMIC_ACQUIRE);
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     if (!acceptable || !nabu_ath10k_os_radio_powered()) { IOLockUnlock(owner); return; }
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     if (__atomic_load_n(&fatal, __ATOMIC_ACQUIRE)) {
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         IOLockUnlock(owner);
         return;
     }
@@ -485,7 +485,7 @@ extern "C" void nabu_ath10k_os_station(const hakios_sta_ops *ops)
     nativeOps.leave = stationLeave;
     nativeOps.state = stationState;
     nativeOps.channels = stationChannels;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     hakios_sta_attach(&nativeOps);
     if (!hakios_sta_present()) withdraw();
     IOLockUnlock(owner);
@@ -496,20 +496,20 @@ extern "C" void nabu_wlan_service_invalidate(int error)
     __atomic_store_n(&fatal, 1, __ATOMIC_RELEASE);
     hakios_sta_invalidate(error);
     if (!ready()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     valid = false;
     ++generation;
     closeLocked();
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 
 extern "C" void nabu_ath10k_os_station_lost(int error)
 {
     hakios_sta_lost(error);
     if (!ready()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     closeLocked();
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 
 extern "C" void nabu_ath10k_os_station_fatal(int error)
@@ -521,41 +521,41 @@ extern "C" void nabu_ath10k_os_station_fatal(int error)
 extern "C" void nabu_ath10k_os_net_link(int up)
 {
     if (!ready()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     if (up) pendingUp = valid && joining && !__atomic_load_n(&fatal, __ATOMIC_ACQUIRE);
     else if (pendingUp || committed || joining) closeLocked();
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
 }
 
 extern "C" void nabu_ath10k_os_net_input(const unsigned char *frame, unsigned long length)
 {
     if (!ready()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     if (!frame || length < 14 || length > HAKIOS_NET_FRAME_MAX || !valid || !committed ||
         __atomic_load_n(&fatal, __ATOMIC_ACQUIRE)) {
         ++rxDropped;
-        IOLockUnlock(gate);
+        IOLockUnlock(serviceGate);
         return;
     }
     ++rxActive;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     hakios_net_input(frame, length);
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     ++rxAccepted;
     --rxActive;
-    IOLockWakeup(gate, &txActive, false);
-    IOLockUnlock(gate);
+    IOLockWakeup(serviceGate, &txActive, false);
+    IOLockUnlock(serviceGate);
 }
 
 extern "C" void nabu_wlan_service_summary()
 {
     if (!ready()) return;
-    IOLockLock(gate);
+    IOLockLock(serviceGate);
     uint64_t accepted = txAccepted, dropped = txDropped, returned = txReturned, errors = txErrors;
     uint64_t received = rxAccepted, rejected = rxDropped, epoch = generation, association = connection;
     unsigned queued = queueCount, active = txActive, readers = backendActive, inputs = rxActive;
     bool up = committed;
-    IOLockUnlock(gate);
+    IOLockUnlock(serviceGate);
     IOLog("NABU WLAN DATA: link=%u generation=%llu connection=%llu TX accepted=%llu dropped=%llu "
           "backend-returned=%llu errors=%llu queued=%u active=%u RX handed=%llu dropped=%llu "
           "backend-pins=%u rx-active=%u\n", up, (unsigned long long)epoch,
