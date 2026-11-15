@@ -22,18 +22,10 @@ on:
         description: Build a signed standalone A640 owned-BO probe (Metal profile only; not installed)
         type: boolean
         default: false
-      cpufreq:
-        description: Compile the opt-in CPU frequency governor
-        type: boolean
-        default: false
-      sensor_clock:
-        description: Compile the integer SSC clock library; no SLPI or HID
-        type: boolean
-        default: false
-      usb_abi_reference:
-        description: Compile the 21H16 USB layout reference; native controller stays disabled
-        type: boolean
-        default: false
+      peripheral_units:
+        description: Comma-separated cpufreq,sensor-clock,usb-abi-reference; empty disables all
+        type: string
+        default: ""
       gpu_clients_24:
         description: Opt-in 24 GPU clients with paired 4 GiB GPU aperture; captured Metal kernel only
         type: boolean
@@ -139,9 +131,7 @@ jobs:
           CAPTURE_LOGS: ${{ inputs.capture_logs }}
           GPU_USERPROBE: ${{ inputs.gpu_userprobe }}
           GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
-          CPUFREQ: ${{ inputs.cpufreq }}
-          SENSOR_CLOCK: ${{ inputs.sensor_clock }}
-          USB_ABI_REFERENCE: ${{ inputs.usb_abi_reference }}
+          PERIPHERAL_UNITS: ${{ inputs.peripheral_units }}
           UI_WATCH: ${{ inputs.ui_watch }}
           WIFI_CONTROL: ${{ inputs.wifi_control }}
           WIFI_RADIO: ${{ inputs.wifi_radio }}
@@ -194,17 +184,19 @@ jobs:
           fi
           if [ "$DPU_SNAPSHOT" = true ]; then log_args+=(--dpu-snapshot); fi
           if [ "$GPU_USERPROBE" = true ]; then log_args+=(--gpu-userprobe); fi
-          if [ "$CPUFREQ" = true ]; then
-            test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
-            log_args+=(--cpufreq)
-          fi
-          if [ "$SENSOR_CLOCK" = true ]; then
-            test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
-            log_args+=(--sensor-clock)
-          fi
-          if [ "$USB_ABI_REFERENCE" = true ]; then
-            test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
-            log_args+=(--usb-abi-reference)
+          if [ -n "$PERIPHERAL_UNITS" ]; then
+            test "$CAPTURE_LOGS" = true
+            test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            case "$PERIPHERAL_UNITS" in
+              *[!a-z,-]*|,*|*,|*,,*) printf '%s\n' 'Invalid peripheral selection' >&2; exit 2 ;;
+            esac
+            IFS=',' read -r -a peripheral_values <<< "$PERIPHERAL_UNITS"
+            for unit in "${peripheral_values[@]}"; do
+              case "$unit" in
+                cpufreq|sensor-clock|usb-abi-reference) log_args+=("--$unit") ;;
+                *) printf '%s\n' 'Invalid peripheral unit' >&2; exit 2 ;;
+              esac
+            done
           fi
           if [ "$GPU_CLIENTS_24" = true ]; then
             test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
@@ -345,9 +337,7 @@ jobs:
         id: turnip
         env:
           GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
-          CPUFREQ: ${{ inputs.cpufreq }}
-          SENSOR_CLOCK: ${{ inputs.sensor_clock }}
-          USB_ABI_REFERENCE: ${{ inputs.usb_abi_reference }}
+          PERIPHERAL_UNITS: ${{ inputs.peripheral_units }}
           FPS_OPT: ${{ inputs.fps_opt }}
           WALLPAPER_FIX: ${{ inputs.wallpaper_fix }}
           WORKER_OPT: ${{ inputs.worker_opt }}
@@ -364,7 +354,7 @@ jobs:
           TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
         run: |
           test "$GPU_CLIENTS_24" != true
-          test "$CPUFREQ" != true && test "$SENSOR_CLOCK" != true && test "$USB_ABI_REFERENCE" != true
+          test -z "$PERIPHERAL_UNITS"
           test "$WIFI_RADIO" != true && test "$WIFI_ATH10K" != true && test "$HALL_SENSOR" != true && test "$DPU_SNAPSHOT" != true && test "$BACKLIGHT" != true && test "$BACKLIGHT_POWER" != true
           fps_args=()
           if [ "$TURNIP_RANGE_DEDUP" = true ]; then fps_args+=(--turnip-range-dedup); fi
