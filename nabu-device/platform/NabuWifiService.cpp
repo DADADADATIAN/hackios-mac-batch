@@ -390,6 +390,16 @@ void withdraw()
 }
 } // namespace
 
+// The native station request owns join credentials. This project has no
+// preconfigured kernel SSID/passphrase source; the optional legacy query
+// explicitly reports absence (0), not join success, and never touches buffers.
+extern "C" int lx_os_network(unsigned char *name, unsigned *nameLength,
+                             unsigned char *passphrase, unsigned *passphraseLength)
+{
+    (void)name; (void)nameLength; (void)passphrase; (void)passphraseLength;
+    return 0;
+}
+
 extern "C" bool nabu_wlan_service_mac_address(uint8_t address[6], uint8_t pin[32])
 {
     if (address) memset(address, 0, 6);

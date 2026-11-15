@@ -37,6 +37,11 @@ extern "C" {
 void nabu_wlan_service_publish();
 void nabu_wlan_service_summary();
 void nabu_wlan_service_invalidate(int error);
+/* Optional legacy kernel network configuration query (hakios.lx.h ABI).
+ * Zero means no preconfigured credentials; native station joins supply their
+ * own credentials. On absence all caller buffers and lengths stay untouched. */
+int lx_os_network(unsigned char *name, unsigned *nameLength,
+                  unsigned char *passphrase, unsigned *passphraseLength);
 /* Supplies the validated permanent address to the backend before radio init.
  * Requires the same source/pin and chosen/wlan properties as publication. */
 bool nabu_wlan_service_mac_address(uint8_t[6], uint8_t[32]);
