@@ -229,10 +229,10 @@ def run(command, output, name):
     return result.stdout
 
 
-def object_image(content):
+def object_image(content, *, combined=False):
     from nabu_idle_ci import _image
     import struct
-    image = _image(content, 1)
+    image = _image(content, 1, allow_duplicate_local_symbols=combined)
     offset, deployment = 32, None
     for _ in range(struct.unpack_from('<I', content, 16)[0]):
         command, size = struct.unpack_from('<II', content, offset)
@@ -354,7 +354,7 @@ def build_kernel(root, out=None, *, headers, inputs=None):
     combined = output / 'all.o'
     run(['xcrun', 'ld', '-r', '-arch', 'arm64', '-platform_version', 'ios', '17.0', sdk_version,
          '-exported_symbols_list', exported, *objects, '-o', combined], output, 'relocatable-link')
-    object_image(combined.read_bytes())
+    object_image(combined.read_bytes(), combined=True)
     linked_defs, linked_imports, linked_common = symbols(run(['xcrun', 'nm', '-g', '-P', combined], output, 'linked-symbols'))
     require(linked_defs == exports and not linked_common, 'ath10k relocatable export/storage drift')
     require(linked_imports == set(external), 'ath10k relocatable import contract drift')
@@ -453,7 +453,7 @@ def qualify_artifacts(read, metadata):
             'ath10k relocatable symbol contract drift')
     combined = get(result['objects'][0])
     require(sha(combined) == metadata['relocatable_sha256'], 'ath10k linked object drift')
-    combined_symbols = inspect_object(combined)['symbols']
+    combined_symbols = inspect_object(combined, allow_duplicate_local_symbols=True)['symbols']
     linked_definitions = {symbol['name'] for symbol in combined_symbols
                           if not symbol['kind'] & 0xe0 and symbol['kind'] & 1 and symbol['kind'] & 0xe}
     linked_imports = {symbol['name'] for symbol in combined_symbols

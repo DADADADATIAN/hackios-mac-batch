@@ -85,12 +85,14 @@ def apply(root, enabled=False, restore=False):
         (directory / 'source-report.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 
 
-def _image(content, expected_kind):
+def _image(content, expected_kind, *, allow_duplicate_local_symbols=False):
     from nabu_ui_watch_qualification import object_symbols
+    require(not allow_duplicate_local_symbols or expected_kind == 1,
+            'Local symbol repetition requires an explicit relocatable object')
     require(len(content) >= 32 and struct.unpack_from('<4I', content) ==
             (0xfeedfacf, 0x100000c, 0, expected_kind), 'Expected ordinary ARM64 Mach-O')
     if expected_kind == 1:
-        object_symbols(content, prefix='')
+        object_symbols(content, prefix='', allow_duplicate_local_symbols=allow_duplicate_local_symbols)
     count, extent = struct.unpack_from('<II', content, 16)
     require(0 < count <= 65536 and extent <= len(content) - 32, 'Nabu idle command extent')
     cursor, table, sections = 32, None, []
@@ -115,7 +117,7 @@ def _image(content, expected_kind):
     offset, number, strings, length = table
     require(offset + number * 16 <= len(content) and strings + length <= len(content),
             'Nabu idle symbol extent')
-    symbols, names = [], {}
+    symbols, names, visibility, ambiguous = [], {}, {}, set()
     for index in range(number):
         label, kind, section, _, address = struct.unpack_from('<IBBHQ', content, offset + index * 16)
         require(label < length, 'Nabu idle symbol name bounds')
@@ -127,8 +129,16 @@ def _image(content, expected_kind):
             require(0 < section <= len(sections), 'Nabu idle definition section')
             critical = name.startswith('_nabu_idle_') or name in (
                 '_cpu_idle', '_ClearIdlePop', '_cpu_idle_exit', '_platform_cache_idle_enter')
-            require(not critical or name not in names, 'Duplicate nabu idle contract symbol')
-            names[name] = address
+            require(not critical or name not in visibility, 'Duplicate nabu idle contract symbol')
+            if allow_duplicate_local_symbols and name in visibility:
+                require(not (kind & 1) and not visibility[name],
+                        'Duplicate externally visible relocatable symbol')
+                ambiguous.add(name)
+                names.pop(name, None)
+            else:
+                visibility[name] = bool(kind & 1)
+            if name not in ambiguous:
+                names[name] = address
     return dict(content=content, kind=expected_kind, sections=sections, symbols=symbols, names=names)
 
 

@@ -100,7 +100,7 @@ def source_constants(generator):
     return constants
 
 
-def object_symbols(data, prefix='_nabu_ui_watch_'):
+def object_symbols(data, prefix='_nabu_ui_watch_', *, allow_duplicate_local_symbols=False):
     require(len(data) >= 32 and struct.unpack_from('<4I', data) == (0xfeedfacf, 0x100000c, 0, 1),
             'UI observer object must be ordinary ARM64 Mach-O')
     count, extent = struct.unpack_from('<II', data, 16)
@@ -127,7 +127,9 @@ def object_symbols(data, prefix='_nabu_ui_watch_'):
     offset, number, strings, length = table
     require(offset + number * 16 <= len(data) and strings + length <= len(data),
             'UI object symbol extent')
-    found = {}
+    require(not allow_duplicate_local_symbols or prefix == '',
+            'Local symbol repetition is only valid for whole-object inspection')
+    found, visibility, ambiguous = {}, {}, set()
     for i in range(number):
         name, kind, section, _, address = struct.unpack_from('<IBBHQ', data, offset + i * 16)
         if kind & 0xe0 or kind & 0xe != 0xe:
@@ -146,11 +148,21 @@ def object_symbols(data, prefix='_nabu_ui_watch_'):
             continue  # LLVM local section marker in a data-only object's empty text section.
         require(va <= address < va + backed and fileoff + backed <= len(data),
                 'UI observer unbacked code')
-        require(name not in found, 'UI observer entry must be unique instructions')
         pos = fileoff + address - va
         require(any(data[pos:min(pos + 16, fileoff + backed)]),
                 'UI observer entry has no emitted code')
-        found[name] = address
+        if name in visibility:
+            require(allow_duplicate_local_symbols and not (kind & 1) and not visibility[name],
+                    'UI observer entry must be unique instructions')
+            # ld -r may retain identical static/outlined names from separate
+            # translation units. Validate each range, but expose no ambiguous
+            # name-based lookup to callers of this parser.
+            ambiguous.add(name)
+            found.pop(name, None)
+        else:
+            visibility[name] = bool(kind & 1)
+        if name not in ambiguous:
+            found[name] = address
     return found
 
 

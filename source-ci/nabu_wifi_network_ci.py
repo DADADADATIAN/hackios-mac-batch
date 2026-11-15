@@ -267,9 +267,9 @@ def capture_dependency(root, output, original, content):
     return dict(artifact_path=target.relative_to(root).as_posix(), sha256=sha(content), bytes=len(content))
 
 
-def inspect_object(content):
+def inspect_object(content, *, allow_duplicate_local_symbols=False):
     """Reuse the existing ARM64 parser and retain semantic relocation identities."""
-    image = _image(content, 1)
+    image = _image(content, 1, allow_duplicate_local_symbols=allow_duplicate_local_symbols)
     sections, entries, table, deployment = [], [], None, None
     offset = 32
     for _ in range(struct.unpack_from('<I', content, 16)[0]):
