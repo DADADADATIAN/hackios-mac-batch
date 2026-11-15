@@ -67,7 +67,7 @@ def selected_files(upstream):
                           'pe_kprintf.o', 'pe_kprintf.o.json', 'bsd_init.o', 'bsd_init.o.json',
                           'kern_exec.o', 'kern_exec.o.json', 'kern_exit.o', 'kern_exit.o.json',
                           'kpi_vfs.o', 'kpi_vfs.o.json',
-                          'cpu.o', 'cpu.o.json',
+                          'cpu.o', 'cpu.o.json', 'processor.o', 'processor.o.json',
                           'thread.o', 'thread.o.json',
                           'kern_mman.o', 'kern_mman.o.json',
                           'ubc_subr.o', 'ubc_subr.o.json',
@@ -112,6 +112,8 @@ def selected_files(upstream):
         for path in sorted(directory.rglob('*')):
             if path.is_dir():
                 continue
+            if relative == 'armdt-platform' and path.relative_to(directory).parts[0] == 'peripherals':
+                continue  # Collected once, including sources and generated proofs, below.
             if path.suffix == '.a' or path.name in report_names or path.name in (
                     'namespace.h', 'inputs.S', 'NativeVirtioBlock.cpp', 'ArmDTPlatform.cpp',
                     'OriginalPMGRABI.h', 'original-bindings.S'):
@@ -133,6 +135,11 @@ def selected_files(upstream):
                     'NativeRamBlock.o', 'NativeRamBlock.cpp', 'compile.log', 'NabuGpuUserprobeAddon.h', 'PersistOverlay.h', 'DirectDisk.h'):
                 add(path, path.relative_to(work))
 
+    for directory in (build / 'armdt-platform/peripherals', build / 'nabu-cpufreq'):
+        if directory.is_dir():
+            for path in sorted(directory.rglob('*')):
+                if path.is_file():
+                    add(path, path.relative_to(work))
     display = build / 'native-legacy-display'
     for name in ('nabu-wifi-network', 'nabu-wifi-ath10k'):
         directory = build / name
@@ -179,6 +186,7 @@ def selected_files(upstream):
                      'tree/.cache/xnu-work/bsd/kern/kern_exec.c',
                      'tree/.cache/xnu-work/bsd/vfs/kpi_vfs.c',
                      'tree/.cache/xnu-work/osfmk/arm64/cpu.c',
+                     'tree/.cache/xnu-work/osfmk/kern/processor.c',
                      'tree/.cache/xnu-work/bsd/kern/kern_mman.c',
                      'tree/.cache/xnu-work/bsd/kern/ubc_subr.c',
                      'tree/.cache/xnu-work/bsd/kern/kern_exit.c',
@@ -306,6 +314,14 @@ def selected_sources(device):
                 for p in sorted((device / 'platform').glob('NabuBacklight*'))]
     sources += [(device / 'scripts/nabu_backlight_source.py',
                  'device/scripts/nabu_backlight_source.py')]
+    sources += [(source_dir / name, 'source-ci/' + name) for name in
+                ('nabu_peripheral_ci.py', 'nabu_peripheral_qualification.py')]
+    sources += [(device / 'scripts' / name, 'device/scripts/' + name) for name in
+                ('nabu_peripheral_build.py', 'nabu_cpufreq_source.py')]
+    sources += [(p, 'device/platform/' + p.name) for p in sorted((device / 'platform').glob('NabuCpuFreq.*'))]
+    sources += [(p, 'device/' + p.relative_to(device).as_posix())
+                for p in sorted((device / 'sensors/clock').glob('*')) if p.is_file()
+                and (p.suffix in ('.h', '.cpp', '.py') or p.name == 'LICENSE')]
     sources += [(source_dir / 'nabu_dpu_snapshot_ci.py', 'source-ci/nabu_dpu_snapshot_ci.py')]
     sources += [(device / 'platform' / name, 'device/platform/' + name)
                 for name in ('NabuDpuSnapshot.h', 'NabuDpuSnapshot.cpp')]
@@ -315,7 +331,7 @@ def selected_sources(device):
                 (device / 'platform/NabuHeartbeat.cpp', 'device/platform/NabuHeartbeat.cpp'),
                 (source_dir / 'nabu_logging_build.py', 'source-ci/nabu_logging_build.py')]
     sources += [(p, 'device/usb/' + p.name) for p in sorted((device / 'usb').glob('*'))
-                if p.is_file() and (p.suffix in ('.cpp', '.h') or p.name == 'LICENSE')]
+                if p.is_file() and (p.suffix in ('.cpp', '.h', '.py') or p.name == 'LICENSE')]
     sources += [(p, 'device/' + p.relative_to(device).as_posix())
                 for p in sorted((device / 'gpu').rglob('*'))
                 if p.is_file() and public_source(p.relative_to(device).as_posix())]
@@ -487,6 +503,9 @@ def main():
                     args.upstream, args.device, candidate, prepared)
                 summary['dpu_snapshot_qualified_statically'] = (
                     manifest['dpu_snapshot_qualification']['compiled'])
+            from nabu_peripheral_qualification import qualify_candidate as qualify_peripherals
+            manifest['peripheral_qualification'] = qualify_peripherals(args.upstream, args.device, candidate, prepared)
+            summary['peripherals_qualified_statically'] = True
             manifest['data_skeleton_qualification'] = qualify_data_skeleton(
                 args.upstream, prepared.get('data_skeleton'), capture_logs=bool(identity['log_capture']))
             summary['data_skeleton_qualified_statically'] = bool(

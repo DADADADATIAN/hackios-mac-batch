@@ -266,6 +266,13 @@ def main():
             boot_pmgr = 'QemuBootPMGR'
             objects += build(root, record, out / 'qemu-pmgr', compile_command,
                              Path(os.environ['UNIXNU_KERNELCACHE']))
+    peripherals = None
+    if args.component == 'ArmDTPlatform':
+        from nabu_peripheral_build import build as build_peripherals
+        extra_objects, peripherals = build_peripherals(
+            root, Path(os.environ.get('UNIXNU_DEVICE', root)).resolve(), record,
+            out / 'peripherals', compile_command)
+        objects += extra_objects
     archive = out / ('lib' + args.component + '.a')
     if archive.exists():
         raise SystemExit('Refuse to reuse an existing platform archive; use a fresh build')
@@ -283,6 +290,7 @@ def main():
         'usb_probe': usb_probe,
         'usb_cdc': usb_cdc,
         'heartbeat': heartbeat,
+        'peripherals': peripherals,
         'architecture': 'arm64', 'deployment': 'iOS 17.0', 'runtime_qualified': False,
     }, indent=2) + '\n', encoding='utf-8')
 

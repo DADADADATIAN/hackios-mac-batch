@@ -701,6 +701,9 @@ def main():
     p.add_argument('--wifi-control', action='store_true', help='Build the independent firmware loader and MPSS control executor')
     p.add_argument('--wifi-radio', action='store_true', help='Build the owned WLAN DMA domain before PAS authentication')
     p.add_argument('--wifi-ath10k', action='store_true', help='Build the pinned ath10k backend and native network host')
+    p.add_argument('--cpufreq', action='store_true', help='Compile the opt-in CPU frequency governor')
+    p.add_argument('--sensor-clock', action='store_true', help='Compile the integer SSC clock library')
+    p.add_argument('--usb-abi-reference', action='store_true', help='Compile the non-runtime 21H16 USB layout reference')
     p.add_argument('--hall-sensor', action='store_true', help='Build opt-in Hall GPIO sampling')
     p.add_argument('--dpu-snapshot', action='store_true',
                    help='Build the read-only DPU topology/cadence snapshot diagnostic')
@@ -717,6 +720,9 @@ def main():
         raise SystemExit('Wi-Fi radio requires the captured Wi-Fi control Metal profile')
     if args.wifi_ath10k and not args.wifi_radio:
         raise SystemExit('Wi-Fi ath10k requires the explicit radio build')
+    if (args.cpufreq or args.sensor_clock or args.usb_abi_reference) and (
+            args.profile != UFS_GPU_METAL_PROFILE or not args.capture_logs):
+        raise SystemExit('Peripheral port units require the captured full-source Metal profile')
     if args.hall_sensor and (args.profile not in UFS_OWNER_PROFILES or not args.capture_logs):
         raise SystemExit('Hall sampling requires a captured hardware UFS owner profile')
     if args.dpu_snapshot and (args.profile not in (UFS_GPU_PROFILE, UFS_GPU_METAL_PROFILE) or
@@ -843,6 +849,9 @@ def main():
     kernel.write_text(text.replace(anchor,
         f"    env['XNU_NABU_SHALLOW_IDLE'] = '{idle_value}'\n" +
         f"    env['NABU_GPU_CLIENTS_24'] = '{int(args.gpu_clients_24)}'\n" + anchor, 1), encoding='utf-8')
+    from nabu_peripheral_ci import prepare as prepare_peripherals
+    peripherals = prepare_peripherals(args.upstream, args.device, cpufreq=args.cpufreq,
+                                      sensor_clock=args.sensor_clock, usb_abi_reference=args.usb_abi_reference)
     signature_scan = (prepare_signature_scan(args.upstream)
                       if 'CONFIG_XNU_NATIVE_CS_HASH_CACHE=y' in options else None)
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -881,6 +890,7 @@ def main():
         'signature_scan_io': signature_scan,
         'log_capture': log_capture,
         'wifi_control': wifi_control,
+        'peripherals': peripherals,
         'hall_sensor': hall_sensor,
         'dpu_snapshot': dpu_snapshot,
         'backlight': backlight,
