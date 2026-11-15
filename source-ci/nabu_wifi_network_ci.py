@@ -194,6 +194,10 @@ def dependency_names(content, directory):
                    for value in dependency_words(content)})
 
 
+ARCHIVE_INDEX_NAMES = frozenset(('/', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED',
+                                 '__.SYMDEF_64', '__.SYMDEF_64 SORTED'))
+
+
 def archive_members(content):
     """Decode ordinary BSD/GNU ar members without invoking runner tools."""
     require(content.startswith(b'!<arch>\n'), 'Expected an ordinary network archive')
@@ -226,12 +230,22 @@ def archive_members(content):
             name = strings[offset:end].decode()
         elif name.endswith('/') and name not in ('/', '/SYM64/'):
             name = name[:-1]
-        if name in ('/', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED', '__.SYMDEF_64', '__.SYMDEF_64 SORTED'):
+        if name in ARCHIVE_INDEX_NAMES:
             continue
         require(name and '/' not in name and name not in {item[0] for item in result}, 'Duplicate or invalid archive member')
         result.append((name, data))
     require(cursor == len(content), 'Archive trailing data')
     return result
+
+
+def qualified_archive_listing(content, listed, expected):
+    """Apple ar t includes its symbol index; object order and bytes remain exact."""
+    indexes = [name for name in listed if name in ARCHIVE_INDEX_NAMES]
+    require(len(indexes) <= 1, 'Network archive has repeated symbol indexes')
+    payloads = [name for name in listed if name not in ARCHIVE_INDEX_NAMES]
+    parsed = archive_members(content)
+    require(payloads == expected == [name for name, _ in parsed], 'Network archive member set drift')
+    return payloads
 
 
 def artifact_bytes(read, record):
@@ -733,8 +747,9 @@ def build_kernel(root, out=None):
     require(pending_archive.resolve().is_relative_to(root), 'Network archive escaped its build root')
     _run(['xcrun', 'ar', 'rcs', str(pending_archive), *map(str, members)], root, output / 'archive.log')
     require(pending_archive.read_bytes().startswith(b'!<arch>\n'), 'Expected an ordinary network archive')
-    listed = _run(['xcrun', 'ar', 't', str(pending_archive)], root, output / 'archive-members.log').decode().splitlines()
-    require(listed == [path.name for path in members], 'Network archive member set drift')
+    raw_listing = _run(['xcrun', 'ar', 't', str(pending_archive)], root, output / 'archive-members.log').decode().splitlines()
+    listed = qualified_archive_listing(pending_archive.read_bytes(), raw_listing,
+                                       [path.name for path in members])
     for path in members:
         stored = _run(['xcrun', 'ar', 'p', str(pending_archive), path.name], root, None)
         require(stored == path.read_bytes(), 'Archive member differs from qualified network object')

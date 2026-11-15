@@ -215,7 +215,9 @@ def main():
             # Selects the publication path in the A640 overlay. The diagnostic
             # archive must not compile it, because it links none of those objects.
             command.append('-DNABU_GPU_METAL=1')
-        if dpu_snapshot and source.stem == 'NabuDpuSnapshot':
+        if dpu_snapshot and source.stem in ('NabuDpuSnapshot', 'NativeAdrenoGpuContext'):
+            # Both the implementation and its guarded bringUp caller need the
+            # explicit opt-in. Compiling only the implementation leaves it unused.
             command.append('-DXNU_NABU_DPU_SNAPSHOT=1')
         result = subprocess.run(command, cwd=record['directory'], capture_output=True)
         (out / (source.stem + '.log')).write_bytes(result.stdout + result.stderr)

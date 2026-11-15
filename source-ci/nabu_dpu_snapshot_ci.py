@@ -4,6 +4,23 @@ import json
 from pathlib import Path
 
 
+# Exact method in the pinned A640 source. A local static (for example widths)
+# has a __ZZ... encoding containing the method name but is not callable code.
+BRINGUP = ('__ZN22NativeAdrenoGpuContext7bringUpEPK11ArmSmmu4KIojjPKjPKtPFvj'
+           'EP28NativeAdrenoGmuContextReport')
+
+
+def bringup_calls(image, target, origin):
+    from nabu_idle_ci import _branches, require
+    definitions = [row for row in image['symbols']
+                   if row[0] == BRINGUP and not row[2] & 0xe0 and row[2] & 0xe == 0xe]
+    require(len(definitions) == 1 and definitions[0][2] & 1,
+            'GPU bring-up method is missing, duplicated or not external in ' + origin)
+    # _branches validates that this exact unique definition is backed by a
+    # nonempty aligned instruction range before examining its branch targets.
+    return [name for _, name in _branches(image, BRINGUP)[2] if name == target]
+
+
 def enable_dpu_snapshot(upstream, device):
     kernel = Path(upstream) / 'scripts/unixnu/kernel.py'
     text = kernel.read_text(encoding='utf-8')
@@ -21,7 +38,7 @@ def enable_dpu_snapshot(upstream, device):
 
 
 def qualify(read, candidate, intent):
-    from nabu_idle_ci import _branches, _image, require
+    from nabu_idle_ci import _image, require
     base = 'outputs/tree/build/native-adreno/'
     block = json.loads(read(base + 'build-report.json')).get('dpu_snapshot') or {}
     image = _image(candidate, 2)
@@ -54,19 +71,15 @@ def qualify(read, candidate, intent):
     require('-DXNU_NABU_DPU_SNAPSHOT=1' in command and
             any(value.endswith('/source/NabuDpuSnapshot.cpp') for value in command),
             'DPU snapshot command does not compile the enabled bound source')
+    context_command = json.loads(read(base + 'compile-command.json')).get('NativeAdrenoGpuContext', [])
+    require('-DXNU_NABU_DPU_SNAPSHOT=1' in context_command and
+            any(value.endswith('/source/NativeAdrenoGpuContext.cpp') for value in context_command),
+            'DPU snapshot command does not compile the enabled caller')
     context_obj = _image(read(base + 'NativeAdrenoGpuContext.o'), 1)
-    object_callers = [label for label in context_obj['names']
-                      if 'GpuContext' in label and 'bringUp' in label]
-    require(object_callers, 'GPU bring-up entry is missing from its archive object')
-    object_calls = [target for caller in object_callers
-                    for _, target in _branches(context_obj, caller)[2] if target == name]
-    require(object_calls, 'GPU context object does not call the DPU snapshot entry')
-    callers = [label for label in image['names']
-               if 'GpuContext' in label and 'bringUp' in label]
-    require(callers, 'GPU bring-up entry is missing from the final kernel')
-    calls = [target for caller in callers
-             for _, target in _branches(image, caller)[2] if target == name]
-    require(calls, 'GPU bring-up does not call the DPU snapshot entry')
+    require(bringup_calls(context_obj, name, 'archive object'),
+            'GPU context object does not call the DPU snapshot entry')
+    require(bringup_calls(image, name, 'final kernel'),
+            'GPU bring-up does not call the DPU snapshot entry')
     return dict(compiled=True, sources=block['sources'], objects=block['objects'],
                 final_definition=hex(image['names'][name]),
                 candidate_sha256=hashlib.sha256(candidate).hexdigest(),
