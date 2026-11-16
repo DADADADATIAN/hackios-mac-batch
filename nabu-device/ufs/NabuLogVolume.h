@@ -1,12 +1,13 @@
 /* Strict read-only GPT/FAT proof for a preallocated XNU2LOG.BIN in ESP.
  * Supported deliberately: LUN0 4K, GPT entries <=128 x128, FAT32 4K clusters,
- * two mirrored FATs, <=1 MiB per FAT, <=1024 directories. Fail closed otherwise.
+ * 512B or 4K sectors, two mirrored FATs, <=4 MiB per FAT, <=1024 directories.
  * The writer never updates a FAT, directory, GPT, or the config block.
  */
 #ifndef NABU_LOG_VOLUME_H
 #define NABU_LOG_VOLUME_H
 #include "NabuLogFormat.h"
 typedef int (*nb_log_read_fn)(void *,uint64_t,uint32_t,uint8_t *);
+enum { NB_LOG_MAX_FAT_BLOCKS = 1024 };
 /* Coarse, non-secret reason for a refused volume. The writer reports the last
  * value verbatim in an IOLog line so a stopped writer names its failing gate
  * instead of only "writer stopped". No allocation token is included. */
@@ -21,7 +22,7 @@ struct nb_log_volume {
   nb_log_read_fn read; void *context;
   uint64_t lun_blocks, esp_first, esp_blocks, file_first;
   uint32_t fat_first, fat_blocks, data_first, clusters, root, file_cluster;
-  uint8_t token[16], fat[1024*1024], scratch[4096], entries[128*128];
+  uint8_t token[16], fat[NB_LOG_MAX_FAT_BLOCKS*4096], scratch[4096], entries[128*128];
   uint32_t directories[1024], reads;
   uint32_t failure; uint64_t failure_lba; uint32_t failure_blocks;
 };
@@ -150,27 +151,35 @@ static inline int nb_volume_open(struct nb_log_volume *v,nb_log_read_fn read,voi
         return nb_volume_fail(v,NBV_GPT_ENTRY);
     }
     if(nb_equal(e,esp_type,16)) {
-      if(v->esp_first || !nb_equal(e+56,"e\0s\0p\0\0\0",8)) return nb_volume_fail(v,NBV_GPT_ESP_ENTRY);
+      if(v->esp_first || !(nb_equal(e+56,"e\0s\0p\0\0\0",8) ||
+                          nb_equal(e+56,"n\0a\0b\0u\0_\0e\0s\0p\0\0\0",18)))
+        return nb_volume_fail(v,NBV_GPT_ESP_ENTRY);
       v->esp_first=first;v->esp_blocks=last-first+1;
     }
   }
   if(!v->esp_first) return nb_volume_fail(v,NBV_GPT_ESP_ENTRY);
   if(!nb_vread(v,v->esp_first,1,p)) return nb_volume_fail(v,NBV_ESP_BOOT_READ);
-  /* 4K sectors and clusters are the measured nabu ESP geometry, not a guessed fallback. */
+  /* Normalize supported FAT sectors to the native UFS 4K read unit. */
   uint32_t bps=p[11]|((uint32_t)p[12]<<8),reserved=p[14]|((uint32_t)p[15]<<8);
   uint32_t total=nb_le32(p+32),fat=nb_le32(p+36),flags=p[40]|((uint32_t)p[41]<<8);
-  if(bps!=4096 || p[13]!=1 || p[16]!=2 || !reserved || !fat || fat>256 ||
-     total!=v->esp_blocks || reserved+2ULL*fat>=total || flags ||
+  uint64_t reserved_bytes=(uint64_t)reserved*bps, fat_bytes=(uint64_t)fat*bps;
+  if((bps!=512 && bps!=4096) || (uint32_t)p[13]*bps!=4096 || p[16]!=2 ||
+     !reserved_bytes || reserved_bytes%4096 || !fat_bytes || fat_bytes%4096 ||
+     fat_bytes>sizeof(v->fat) || (uint64_t)total*bps!=v->esp_blocks*4096 ||
+     reserved_bytes+2*fat_bytes>=v->esp_blocks*4096 || flags ||
      p[17] || p[18] || p[19] || p[20] || p[22] || p[23] || p[42] || p[43] ||
      p[510]!=0x55 || p[511]!=0xaa || !nb_equal(p+82,"FAT32",5)) return nb_volume_fail(v,NBV_ESP_BPB);
-  v->fat_first=reserved;v->fat_blocks=fat;v->data_first=reserved+2*fat;
-  v->clusters=total-v->data_first;v->root=nb_le32(p+44);
-  if(v->clusters<65525 || (v->clusters+2ULL)*4>fat*4096ULL || !nb_cluster_ok(v,v->root))
+  v->fat_first=(uint32_t)(reserved_bytes/4096);
+  v->fat_blocks=(uint32_t)(fat_bytes/4096);
+  v->data_first=v->fat_first+2*v->fat_blocks;
+  v->clusters=(uint32_t)(v->esp_blocks-v->data_first);v->root=nb_le32(p+44);
+  if(v->clusters<65525 || (v->clusters+2ULL)*4>fat_bytes || !nb_cluster_ok(v,v->root))
     return nb_volume_fail(v,NBV_ESP_GEOMETRY);
   /* Both mirrors must agree before any data block can become writable. */
-  for(unsigned i=0;i<fat;i++) {
-    if(!nb_vread(v,v->esp_first+reserved+i,1,v->fat+4096*i) ||
-       !nb_vread(v,v->esp_first+reserved+fat+i,1,p) || !nb_equal(p,v->fat+4096*i,4096))
+  for(unsigned i=0;i<v->fat_blocks;i++) {
+    if(!nb_vread(v,v->esp_first+v->fat_first+i,1,v->fat+4096*i) ||
+       !nb_vread(v,v->esp_first+v->fat_first+v->fat_blocks+i,1,p) ||
+       !nb_equal(p,v->fat+4096*i,4096))
       return nb_volume_fail(v,NBV_FAT_MIRROR);
   }
   if(!nb_find_root_file(v)) return nb_volume_fail(v,NBV_ROOT_FILE);
