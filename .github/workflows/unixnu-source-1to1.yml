@@ -1,0 +1,410 @@
+name: unixnu source build
+on:
+  workflow_dispatch:
+    inputs:
+      unixnu_ref:
+        description: Pinned UniXNU source revision
+        required: true
+        default: "245aca1a9ec5b730b1cad80fade295800d2981f1"
+      defconfig:
+        description: Bootstrap, passive/read-only UFS, QEMU transport or owner-verified root (not boot qualification)
+        required: true
+        default: "nabu_bootstrap_defconfig"
+      xcode:
+        description: Xcode on macos-26
+        required: true
+        default: "26.6"
+      capture_logs:
+        description: Build RAM console capture and gated preallocated ESP log writer (off by default)
+        type: boolean
+        default: false
+      gpu_userprobe:
+        description: Build a signed standalone A640 owned-BO probe (Metal profile only; not installed)
+        type: boolean
+        default: false
+      peripheral_units:
+        description: Comma-separated cpufreq,sensor-clock,usb-abi-reference; empty disables all
+        type: string
+        default: ""
+      gpu_clients_24:
+        description: Opt-in 24 GPU clients with paired 4 GiB GPU aperture; captured Metal kernel only
+        type: boolean
+        default: false
+      wifi_control:
+        description: Build the independent ESP firmware loader and one-shot MPSS control chain
+        type: boolean
+        default: false
+      wifi_radio:
+        description: Build the owned WLAN DMA domain for the captured Wi-Fi control Metal profile
+        type: boolean
+        default: false
+      wifi_ath10k:
+        description: Build the pinned ath10k backend and native 21H16 network host
+        type: boolean
+        default: false
+      hall_sensor:
+        description: Build opt-in GPIO9 Hall sampling with a bound source FDT
+        type: boolean
+        default: false
+      backlight:
+        description: Build the opt-in read-only KTZ8866 backlight probe with a bound source FDT
+        type: boolean
+        default: false
+      backlight_power:
+        description: Compile the default-off Legacy backlight power hook (requires probe, capture and hardware display)
+        type: boolean
+        default: false
+      dpu_snapshot:
+        description: Build the read-only DPU topology/cadence snapshot diagnostic (A640 GPU profiles only)
+        type: boolean
+        default: false
+      ui_watch:
+        description: Build opt-in bounded UI exec and first main-thread observation (no device installation)
+        type: boolean
+        default: false
+      turnip_only:
+        description: Build only Turnip (Mesa Vulkan, darwin KMD) for iOS against the A640 ABI; skips the kernel job
+        type: boolean
+        default: false
+      fps_opt:
+        description: Turnip-only experiment; reuse bounded kernel scanout sources on the desktop-capable plugin baseline
+        type: boolean
+        default: false
+      wallpaper_fix:
+        description: Turnip-only CoreImage library and stitching support; requires fps_opt; no device installation
+        type: boolean
+        default: false
+      worker_opt:
+        description: Build opt-in render lowering worker and runtime telemetry on the deployed wallpaper baseline
+        type: boolean
+        default: false
+      turnip_render_mode:
+        description: Optional matched render-mode comparison with counters; requires worker_opt; both keep nocb
+        type: choice
+        options: [unchanged, sysmem, gmem]
+        default: unchanged
+      turnip_range_dedup:
+        description: Turnip-only opt-in exact submit-range dedup patch (markers stripped); default build unchanged
+        type: boolean
+        default: false
+      async_fix:
+        description: Turnip-only async Metal creation fix and bounded callback regression; no device installation
+        type: boolean
+        default: false
+      completion_fix:
+        description: Turnip-only completion-wait decoupling fix; waits stop tracking user handler delivery
+        type: boolean
+        default: false
+      completion_observe:
+        description: Turnip-only completion observation on the four-patch baseline; preserves wait and callback behavior
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: unixnu-source-${{ github.ref }}-${{ inputs.turnip_only && format('turnip-{0}', inputs.turnip_render_mode) || 'kernel' }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+jobs:
+  build:
+    if: ${{ !inputs.turnip_only }}
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ inputs.xcode }}.app/Contents/Developer
+      UNIXNU_DEVICE: ${{ github.workspace }}/nabu-device
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Prepare the selected source profile
+        env:
+          REQUESTED_REF: ${{ inputs.unixnu_ref }}
+          REQUESTED_CONFIG: ${{ inputs.defconfig }}
+          CAPTURE_LOGS: ${{ inputs.capture_logs }}
+          GPU_USERPROBE: ${{ inputs.gpu_userprobe }}
+          GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
+          PERIPHERAL_UNITS: ${{ inputs.peripheral_units }}
+          UI_WATCH: ${{ inputs.ui_watch }}
+          WIFI_CONTROL: ${{ inputs.wifi_control }}
+          WIFI_RADIO: ${{ inputs.wifi_radio }}
+          WIFI_ATH10K: ${{ inputs.wifi_ath10k }}
+          HALL_SENSOR: ${{ inputs.hall_sensor }}
+          BACKLIGHT: ${{ inputs.backlight }}
+          BACKLIGHT_POWER: ${{ inputs.backlight_power }}
+          DPU_SNAPSHOT: ${{ inputs.dpu_snapshot }}
+          TURNIP_RENDER_MODE: ${{ inputs.turnip_render_mode }}
+          FPS_OPT: ${{ inputs.fps_opt }}
+          WALLPAPER_FIX: ${{ inputs.wallpaper_fix }}
+          ASYNC_FIX: ${{ inputs.async_fix }}
+          COMPLETION_FIX: ${{ inputs.completion_fix }}
+          COMPLETION_OBSERVE: ${{ inputs.completion_observe }}
+          TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
+        run: |
+          test "$FPS_OPT" != true
+          test "$TURNIP_RANGE_DEDUP" != true
+          test "$WALLPAPER_FIX" != true
+          test "$ASYNC_FIX" != true
+          test "$COMPLETION_FIX" != true
+          test "$COMPLETION_OBSERVE" != true
+          test -z "$TURNIP_RENDER_MODE" || test "$TURNIP_RENDER_MODE" = unchanged
+          test "$REQUESTED_REF" = 245aca1a9ec5b730b1cad80fade295800d2981f1
+          if [ "$GPU_USERPROBE" = true ]; then test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig; fi
+          test -d "$DEVELOPER_DIR"
+          git clone --quiet --no-checkout https://github.com/UniXNU/UniXNU.git unixnu
+          git -C unixnu fetch --quiet origin "$REQUESTED_REF"
+          git -C unixnu checkout --quiet --detach "$REQUESTED_REF"
+          log_args=()
+          if [ "$CAPTURE_LOGS" = true ]; then log_args+=(--capture-logs); fi
+          if [ "$WIFI_CONTROL" = true ]; then log_args+=(--wifi-control); fi
+          if [ "$WIFI_RADIO" = true ]; then
+            test "$WIFI_CONTROL" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            log_args+=(--wifi-radio)
+          fi
+          if [ "$WIFI_ATH10K" = true ]; then
+            test "$WIFI_RADIO" = true
+            log_args+=(--wifi-ath10k)
+          fi
+          if [ "$HALL_SENSOR" = true ]; then log_args+=(--hall-sensor); fi
+          if [ "$BACKLIGHT" = true ]; then log_args+=(--backlight); fi
+          if [ "$BACKLIGHT_POWER" = true ]; then
+            test "$BACKLIGHT" = true && test "$CAPTURE_LOGS" = true
+            case "$REQUESTED_CONFIG" in
+              nabu_ufs_cpu_present_defconfig|nabu_ufs_gpu_defconfig|nabu_ufs_gpu_metal_defconfig) ;;
+              *) printf '%s\n' 'Backlight power requires a hardware CPU display profile' >&2; exit 2 ;;
+            esac
+            log_args+=(--backlight-power)
+          fi
+          if [ "$DPU_SNAPSHOT" = true ]; then log_args+=(--dpu-snapshot); fi
+          if [ "$GPU_USERPROBE" = true ]; then log_args+=(--gpu-userprobe); fi
+          if [ -n "$PERIPHERAL_UNITS" ]; then
+            test "$CAPTURE_LOGS" = true
+            test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            case "$PERIPHERAL_UNITS" in
+              *[!a-z,-]*|,*|*,|*,,*) printf '%s\n' 'Invalid peripheral selection' >&2; exit 2 ;;
+            esac
+            IFS=',' read -r -a peripheral_values <<< "$PERIPHERAL_UNITS"
+            for unit in "${peripheral_values[@]}"; do
+              case "$unit" in
+                cpufreq|sensor-clock|usb-abi-reference) log_args+=("--$unit") ;;
+                *) printf '%s\n' 'Invalid peripheral unit' >&2; exit 2 ;;
+              esac
+            done
+          fi
+          if [ "$GPU_CLIENTS_24" = true ]; then
+            test "$CAPTURE_LOGS" = true && test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            log_args+=(--gpu-clients-24)
+          fi
+          if [ "$UI_WATCH" = true ]; then
+            test "$GPU_USERPROBE" = true && test "$CAPTURE_LOGS" = true
+            test "$REQUESTED_CONFIG" = nabu_ufs_gpu_metal_defconfig
+            log_args+=(--ui-watch)
+          fi
+          python3 source-ci/prepare_source.py --upstream unixnu --device nabu-device --profile "$REQUESTED_CONFIG" --report "$RUNNER_TEMP/source-prepare.json" "${log_args[@]}"
+      - name: Fetch the pinned private small input
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          test -n "$GH_TOKEN" && test -n "$PRIVATE_INPUTS_REPO"
+          # Refuse to export proprietary outputs to a public repository.
+          test "$(gh api "repos/$PRIVATE_INPUTS_REPO" --jq .private)" = true
+          gh release download v1 --repo "$PRIVATE_INPUTS_REPO" --pattern ipsw-21h16-small.zip --dir "$RUNNER_TEMP"
+          actual=$(shasum -a 256 "$RUNNER_TEMP/ipsw-21h16-small.zip" | cut -d' ' -f1)
+          test "$actual" = c818a6865737b89fceef07d978de4ba8bdb7ea7a1c313838ca4181e56243b33d
+          echo "SOURCE_INPUT_SHA256=$actual" >> "$GITHUB_ENV"
+          echo "UNIXNU_IPSW=$RUNNER_TEMP/ipsw-21h16-small.zip" >> "$GITHUB_ENV"
+      - name: Fetch the private 21H16 OS owner policy
+        if: contains(fromJSON('["nabu_qemu_root_defconfig","nabu_qemu_data_defconfig","nabu_qemu_cpu_ui_defconfig","nabu_qemu_legacy_defconfig","nabu_qemu_cpu_present_defconfig","nabu_ufs_root_defconfig","nabu_ufs_data_defconfig","nabu_ufs_cpu_ui_defconfig","nabu_ufs_cpu_present_defconfig","nabu_ufs_gpu_defconfig","nabu_ufs_gpu_metal_defconfig"]'), inputs.defconfig)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          mkdir "$RUNNER_TEMP/owner-policy-download" "$RUNNER_TEMP/owner-policy"
+          gh release download v1 --repo "$PRIVATE_INPUTS_REPO" --pattern owner-policy-os.tar.gz --dir "$RUNNER_TEMP/owner-policy-download"
+          expected=$(python3 -c 'import sys; sys.path.insert(0,"source-ci"); from prepare_source import OWNER_POLICY; print(OWNER_POLICY["sha256"])')
+          actual=$(shasum -a 256 "$RUNNER_TEMP/owner-policy-download/owner-policy-os.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -xzf "$RUNNER_TEMP/owner-policy-download/owner-policy-os.tar.gz" -C "$RUNNER_TEMP/owner-policy"
+          echo "UNIXNU_OWNER_POLICY=$RUNNER_TEMP/owner-policy" >> "$GITHUB_ENV"
+      - name: Fetch the private 21H16 SystemOS owner policy
+        if: contains(fromJSON('["nabu_qemu_root_defconfig","nabu_qemu_data_defconfig","nabu_qemu_cpu_ui_defconfig","nabu_qemu_legacy_defconfig","nabu_qemu_cpu_present_defconfig","nabu_ufs_root_defconfig","nabu_ufs_data_defconfig","nabu_ufs_cpu_ui_defconfig","nabu_ufs_cpu_present_defconfig","nabu_ufs_gpu_defconfig","nabu_ufs_gpu_metal_defconfig"]'), inputs.defconfig)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          mkdir "$RUNNER_TEMP/systemos-policy-download" "$RUNNER_TEMP/systemos-policy"
+          gh release download v1 --repo "$PRIVATE_INPUTS_REPO" --pattern owner-policy-systemos.tar.gz --dir "$RUNNER_TEMP/systemos-policy-download"
+          expected=$(python3 -c 'import sys; sys.path.insert(0,"source-ci"); from prepare_source import SYSTEMOS_POLICY; print(SYSTEMOS_POLICY["sha256"])')
+          actual=$(shasum -a 256 "$RUNNER_TEMP/systemos-policy-download/owner-policy-systemos.tar.gz" | cut -d' ' -f1)
+          test "$actual" = "$expected"
+          tar -xzf "$RUNNER_TEMP/systemos-policy-download/owner-policy-systemos.tar.gz" -C "$RUNNER_TEMP/systemos-policy"
+          echo "UNIXNU_OWNER_POLICY_SYSTEMOS=$RUNNER_TEMP/systemos-policy" >> "$GITHUB_ENV"
+      - name: Fetch the qualified private display reference
+        # 1TO1 BLOCKED INPUT: the author's reference is a CI-produced archive with
+        # a source-manifest binding run_id/head_sha/kernel.json/.config/prepare-report.
+        # It is private and cannot be rebuilt from our bare kernel.macho.gz.
+        # This is the ONLY step that is not a verbatim reproduction.
+        if: contains(fromJSON('["nabu_qemu_legacy_defconfig","nabu_qemu_cpu_present_defconfig","nabu_ufs_cpu_present_defconfig","nabu_ufs_gpu_defconfig","nabu_ufs_gpu_metal_defconfig"]'), inputs.defconfig)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/display-reference" "$RUNNER_TEMP/display-download"
+          gh release download v1 --repo "$PRIVATE_INPUTS_REPO" --pattern reference-kernel.macho.gz --dir "$RUNNER_TEMP/display-download"
+          gunzip -c "$RUNNER_TEMP/display-download/reference-kernel.macho.gz" > "$RUNNER_TEMP/display-reference/kernel.macho"
+          echo "UNIXNU_DISPLAY_REFERENCE=$RUNNER_TEMP/display-reference/kernel.macho" >> "$GITHUB_ENV"
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc ripgrep
+          if ! command -v unifdef >/dev/null; then
+            brew install unifdef
+            echo "$(brew --prefix unifdef)/bin" >> "$GITHUB_PATH"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Build and prelink the selected profile from source
+        id: kernel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REQUESTED_CONFIG: ${{ inputs.defconfig }}
+        run: |
+          cd unixnu
+          ./unixnu defconfig "$REQUESTED_CONFIG"
+          ./unixnu build kernel
+      - name: Build the optional ABI-bound A640 userspace probe
+        if: inputs.gpu_userprobe && inputs.defconfig == 'nabu_ufs_gpu_metal_defconfig'
+        run: |
+          python3 nabu-device/scripts/build-nabu-gpu-userprobe.py --output unixnu/out/nabu/userprobe
+      - name: Preserve candidate and build evidence
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.kernel.outcome }}
+        run: |
+          python3 source-ci/collect_outputs.py --upstream unixnu --device nabu-device \
+            --output "$RUNNER_TEMP/source-output" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --head-sha "$GITHUB_SHA" --build-outcome "$BUILD_OUTCOME" \
+            --input-sha256 "${SOURCE_INPUT_SHA256:-}" --prepare-report "$RUNNER_TEMP/source-prepare.json"
+      - name: Upload private output (including failed builds)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          TAG="source-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
+          ARCHIVE="$RUNNER_TEMP/source-output/$TAG.tar.gz"
+          test -f "$ARCHIVE" || exit 0
+          test "$(gh api "repos/$PRIVATE_INPUTS_REPO" --jq .private)" = true
+          gh release create "$TAG" "$ARCHIVE" --repo "$PRIVATE_INPUTS_REPO" \
+            --title "$TAG" --notes "Private source-build evidence for public run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT; not boot-qualified."
+      - name: Publish only bounded identity summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-summary-${{ github.run_id }}
+          path: ${{ runner.temp }}/source-output/summary.json
+          if-no-files-found: error
+          retention-days: 30
+  turnip:
+    if: ${{ inputs.turnip_only }}
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ inputs.xcode }}.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install host tools
+        run: |
+          brew install ninja glslang spirv-tools llvm
+          # The Metal plugin's bridge: cargo +1.98.0 for aarch64-apple-ios; llvm-as for its AIR fixtures.
+          rustup toolchain install 1.98.0 --profile minimal --target aarch64-apple-ios
+          rustc +1.98.0 --version
+          "$(brew --prefix llvm)/bin/llvm-as" --version | head -n 2
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Cross-build Turnip and the Metal plugin for iOS against the A640 ABI
+        id: turnip
+        env:
+          GPU_CLIENTS_24: ${{ inputs.gpu_clients_24 }}
+          PERIPHERAL_UNITS: ${{ inputs.peripheral_units }}
+          FPS_OPT: ${{ inputs.fps_opt }}
+          WALLPAPER_FIX: ${{ inputs.wallpaper_fix }}
+          WORKER_OPT: ${{ inputs.worker_opt }}
+          TURNIP_RENDER_MODE: ${{ inputs.turnip_render_mode }}
+          WIFI_RADIO: ${{ inputs.wifi_radio }}
+          WIFI_ATH10K: ${{ inputs.wifi_ath10k }}
+          HALL_SENSOR: ${{ inputs.hall_sensor }}
+          BACKLIGHT: ${{ inputs.backlight }}
+          BACKLIGHT_POWER: ${{ inputs.backlight_power }}
+          DPU_SNAPSHOT: ${{ inputs.dpu_snapshot }}
+          ASYNC_FIX: ${{ inputs.async_fix }}
+          COMPLETION_FIX: ${{ inputs.completion_fix }}
+          COMPLETION_OBSERVE: ${{ inputs.completion_observe }}
+          TURNIP_RANGE_DEDUP: ${{ inputs.turnip_range_dedup }}
+        run: |
+          test "$GPU_CLIENTS_24" != true
+          test -z "$PERIPHERAL_UNITS"
+          test "$WIFI_RADIO" != true && test "$WIFI_ATH10K" != true && test "$HALL_SENSOR" != true && test "$DPU_SNAPSHOT" != true && test "$BACKLIGHT" != true && test "$BACKLIGHT_POWER" != true
+          fps_args=()
+          if [ "$TURNIP_RANGE_DEDUP" = true ]; then fps_args+=(--turnip-range-dedup); fi
+          if [ "$FPS_OPT" = true ]; then fps_args+=(--fps-opt); fi
+          if [ "$WALLPAPER_FIX" = true ]; then
+            test "$FPS_OPT" = true
+            fps_args+=(--wallpaper-fix)
+          fi
+          if [ "$WORKER_OPT" = true ]; then
+            test "$FPS_OPT" = true && test "$WALLPAPER_FIX" = true
+            fps_args+=(--worker-opt)
+          fi
+          case "$TURNIP_RENDER_MODE" in
+            ''|unchanged) ;;
+            sysmem|gmem)
+              test "$WORKER_OPT" = true
+              fps_args+=(--turnip-render-mode "$TURNIP_RENDER_MODE") ;;
+            *) printf '%s\n' 'Unsupported Turnip render mode' >&2; exit 2 ;;
+          esac
+          if [ "$ASYNC_FIX" = true ]; then
+            test "$FPS_OPT" != true
+            fps_args+=(--async-fix)
+          fi
+          if [ "$COMPLETION_FIX" = true ]; then
+            test "$FPS_OPT" != true && test "$ASYNC_FIX" != true
+            fps_args+=(--completion-fix)
+          fi
+          if [ "$COMPLETION_OBSERVE" = true ]; then
+            test "$FPS_OPT" != true && test "$ASYNC_FIX" != true && test "$COMPLETION_FIX" != true
+            fps_args+=(--completion-observe)
+          fi
+          python3 source-ci/nabu_turnip_ci.py --device nabu-device --plugin \
+            --work "$RUNNER_TEMP/unixnu-turnip" --output "$RUNNER_TEMP/turnip-output" "${fps_args[@]}"
+      - name: Upload private output (including failed builds)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
+          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
+        run: |
+          TAG="turnip-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
+          OUT="$RUNNER_TEMP/turnip-output"
+          test -d "$OUT" || exit 0
+          tar -czf "$RUNNER_TEMP/$TAG.tar.gz" -C "$OUT" .
+          test "$(gh api "repos/$PRIVATE_INPUTS_REPO" --jq .private)" = true
+          gh release create "$TAG" "$RUNNER_TEMP/$TAG.tar.gz" --repo "$PRIVATE_INPUTS_REPO" \
+            --title "$TAG" --notes "Private Turnip build output for public run $GITHUB_RUN_ID; compile/link only, not GPU-qualified."
+      - name: Publish only the bounded report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/turnip-output/turnip-report.json
+          if-no-files-found: warn
+          retention-days: 30
