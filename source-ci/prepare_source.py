@@ -42,9 +42,9 @@ UFS_OWNER_PROFILES = ('nabu_ufs_root_defconfig', 'nabu_ufs_data_defconfig', CPU_
 UFS_PROFILES = ('nabu_ufs_passive_defconfig', 'nabu_ufs_readonly_defconfig',
                 'nabu_ufs_root_defconfig')
 OWNER_POLICY = {'release': 'nabu-owner-os-21h16-v1', 'asset': 'os-policy.tar.gz',
-                'sha256': '478b9adc9dd57d98a007eb1fa04fd07ff62c1bf2bdec6087fa3997ed11c01452'}
+                'sha256': 'f42224aee7ba831693773231edb92bc0b9ee255d7075667e7a1f0402bd488cbd'}
 SYSTEMOS_POLICY = {'release': 'nabu-owner-systemos-21h16-v1', 'asset': 'systemos-policy.tar.gz',
-                   'sha256': 'e56a28b5921f33ee8d5125ac700bd3564e2f1d73208bfa7bd6aa007ec7f130c3'}
+                   'sha256': '0d083859b624b42e4839f3b8174168ec2c595a2a68faecb1e0ff7bcb762a8e65'}
 ROOT_VOLUME_UUID = 'F577F6BD-3BB9-4864-BBDF-972FC2E94AE3'
 CACHE_VOLUME_UUID = 'C374ACD3-75FE-4FAD-B02E-FC3C9A86DA11'
 # Original j171ap/21H16 security initializer, before the declared prelink slide.
