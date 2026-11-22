@@ -388,24 +388,14 @@ jobs:
           fi
           python3 source-ci/nabu_turnip_ci.py --device nabu-device --plugin \
             --work "$RUNNER_TEMP/unixnu-turnip" --output "$RUNNER_TEMP/turnip-output" "${fps_args[@]}"
-      - name: Upload private output (including failed builds)
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.PRIVATE_INPUTS_TOKEN }}
-          PRIVATE_INPUTS_REPO: ${{ vars.PRIVATE_INPUTS_REPO }}
-        run: |
-          TAG="turnip-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
-          OUT="$RUNNER_TEMP/turnip-output"
-          test -d "$OUT" || exit 0
-          tar -czf "$RUNNER_TEMP/$TAG.tar.gz" -C "$OUT" .
-          test "$(gh api "repos/$PRIVATE_INPUTS_REPO" --jq .private)" = true
-          gh release create "$TAG" "$RUNNER_TEMP/$TAG.tar.gz" --repo "$PRIVATE_INPUTS_REPO" \
-            --title "$TAG" --notes "Private Turnip build output for public run $GITHUB_RUN_ID; compile/link only, not GPU-qualified."
-      - name: Publish only the bounded report
+      - name: Publish full Turnip + Metal plugin output as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: turnip-report-${{ github.run_id }}
-          path: ${{ runner.temp }}/turnip-output/turnip-report.json
+          name: turnip-output-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/turnip-output/libvulkan_freedreno.dylib
+            ${{ runner.temp }}/turnip-output/plugin/**
+            ${{ runner.temp }}/turnip-output/turnip-report.json
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90
